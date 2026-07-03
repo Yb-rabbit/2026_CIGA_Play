@@ -7,13 +7,18 @@ const SOUND_WORDS := ["嘭！", "哎哟！", "Ouch!", "咚！", "嘎！"]
 
 var wobble_tween: Tween
 var has_bump_this_frame: bool = false
+var _cooldown: float = 0.0
 
 func trigger_bump(body: Node) -> void:
 	if has_bump_this_frame:
 		return
+	# 冷却 0.8 秒，避免连续触发淹没画面
+	if _cooldown > 0.0:
+		return
 	has_bump_this_frame = true
+	_cooldown = 0.8
 
-	# 鬼畜缩放
+	# 鬼畜缩放（频率降低）
 	_do_wobble()
 
 	# 随机变色
@@ -21,10 +26,10 @@ func trigger_bump(body: Node) -> void:
 	var color_tween := create_tween()
 	color_tween.tween_property(self, "modulate", Color.WHITE, 0.5)
 
-	# 浮动拟声词
+	# 小号浮动拟声词（20px，不挡视线）
 	var label := Label.new()
 	label.text = SOUND_WORDS[randi() % SOUND_WORDS.size()]
-	label.font_size = 48
+	label.add_theme_font_size_override("font_size", 20)
 	label.modulate = Color.ORANGE
 	if body:
 		label.position = (global_position + body.global_position) / 2.0
@@ -34,9 +39,9 @@ func trigger_bump(body: Node) -> void:
 
 	var float_tween := create_tween()
 	float_tween.set_parallel(true)
-	float_tween.tween_property(label, "position", label.position + Vector2(0, -60), 0.8)
-	float_tween.tween_property(label, "modulate", Color.TRANSPARENT, 0.8)
-	float_tween.tween_callback(label.queue_free).set_delay(0.8)
+	float_tween.tween_property(label, "position", label.position + Vector2(0, -30), 0.6)
+	float_tween.tween_property(label, "modulate", Color.TRANSPARENT, 0.6)
+	float_tween.tween_callback(label.queue_free).set_delay(0.6)
 
 func _do_wobble() -> void:
 	if wobble_tween and wobble_tween.is_running():

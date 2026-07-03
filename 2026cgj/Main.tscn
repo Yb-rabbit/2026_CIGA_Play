@@ -1,15 +1,19 @@
-[gd_scene load_steps=9 format=3 uid="uid://dq8m7n3xp2ky1"]
+[gd_scene load_steps=10 format=3 uid="uid://dq8m7n3xp2ky1"]
 
 [ext_resource type="Script" path="res://ship.gd" id="1_ship"]
 [ext_resource type="Script" path="res://anchor.gd" id="2_anchor"]
 [ext_resource type="Script" path="res://ui.gd" id="3_ui"]
 [ext_resource type="PackedScene" path="res://AnchorWorm.tscn" id="4_worm"]
-
-[sub_resource type="RectangleShape2D" id="wall_h"]
-size = Vector2(1024, 16)
+[ext_resource type="Script" path="res://MovingPlatform.gd" id="5_mplat"]
 
 [sub_resource type="RectangleShape2D" id="wall_v"]
-size = Vector2(16, 768)
+size = Vector2(4, 768)
+
+[sub_resource type="RectangleShape2D" id="ground_h"]
+size = Vector2(1024, 48)
+
+[sub_resource type="RectangleShape2D" id="plat_h"]
+size = Vector2(160, 10)
 
 [sub_resource type="RectangleShape2D" id="ship_shape"]
 size = Vector2(40, 40)
@@ -24,48 +28,110 @@ position = Vector2(0, 0)
 
 [node name="Walls" type="Node2D" parent="."]
 
-[node name="WallTop" type="StaticBody2D" parent="Walls"]
-position = Vector2(0, -376)
-
-[node name="CollisionShape2D" type="CollisionShape2D" parent="Walls/WallTop"]
-shape = SubResource("wall_h")
-
-[node name="Polygon2D" type="Polygon2D" parent="Walls/WallTop"]
-polygon = PackedVector2Array(-512, -8, 512, -8, 512, 8, -512, 8)
-color = Color(0.25, 0.25, 0.25, 1)
-
-[node name="WallBottom" type="StaticBody2D" parent="Walls"]
-position = Vector2(0, 376)
-
-[node name="CollisionShape2D" type="CollisionShape2D" parent="Walls/WallBottom"]
-shape = SubResource("wall_h")
-
-[node name="Polygon2D" type="Polygon2D" parent="Walls/WallBottom"]
-polygon = PackedVector2Array(-512, -8, 512, -8, 512, 8, -512, 8)
-color = Color(0.25, 0.25, 0.25, 1)
-
 [node name="WallLeft" type="StaticBody2D" parent="Walls"]
-position = Vector2(-504, 0)
+position = Vector2(-510, 0)
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="Walls/WallLeft"]
 shape = SubResource("wall_v")
 
 [node name="Polygon2D" type="Polygon2D" parent="Walls/WallLeft"]
-polygon = PackedVector2Array(-8, -384, 8, -384, 8, 384, -8, 384)
+polygon = PackedVector2Array(-2, -384, 2, -384, 2, 384, -2, 384)
 color = Color(0.25, 0.25, 0.25, 1)
 
 [node name="WallRight" type="StaticBody2D" parent="Walls"]
-position = Vector2(504, 0)
+position = Vector2(510, 0)
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="Walls/WallRight"]
 shape = SubResource("wall_v")
 
 [node name="Polygon2D" type="Polygon2D" parent="Walls/WallRight"]
-polygon = PackedVector2Array(-8, -384, 8, -384, 8, 384, -8, 384)
+polygon = PackedVector2Array(-2, -384, 2, -384, 2, 384, -2, 384)
 color = Color(0.25, 0.25, 0.25, 1)
 
+[node name="Ground" type="StaticBody2D" parent="Walls"]
+position = Vector2(0, 352)
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="Walls/Ground"]
+shape = SubResource("ground_h")
+
+[node name="Polygon2D" type="Polygon2D" parent="Walls/Ground"]
+polygon = PackedVector2Array(-512, -24, 512, -24, 512, 24, -512, 24)
+color = Color(0.2, 0.2, 0.2, 1)
+
+[node name="Platforms" type="Node2D" parent="."]
+
+[node name="Plat_LeftMid" type="AnimatableBody2D" parent="Platforms"]
+position = Vector2(-260, -80)
+script = ExtResource("5_mplat")
+move_direction = Vector2(0, -1)
+move_speed = 120.0
+move_distance = 140.0
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="Platforms/Plat_LeftMid"]
+shape = SubResource("plat_h")
+
+[node name="Polygon2D" type="Polygon2D" parent="Platforms/Plat_LeftMid"]
+polygon = PackedVector2Array(-80, -5, 80, -5, 80, 5, -80, 5)
+color = Color(0.3, 0.5, 0.2, 1)
+
+[node name="Plat_RightMid" type="AnimatableBody2D" parent="Platforms"]
+position = Vector2(260, -180)
+script = ExtResource("5_mplat")
+move_direction = Vector2(1, 0)
+move_speed = 100.0
+move_distance = 180.0
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="Platforms/Plat_RightMid"]
+shape = SubResource("plat_h")
+
+[node name="Polygon2D" type="Polygon2D" parent="Platforms/Plat_RightMid"]
+polygon = PackedVector2Array(-80, -5, 80, -5, 80, 5, -80, 5)
+color = Color(0.3, 0.5, 0.2, 1)
+
+[node name="Plat_TopCenter" type="AnimatableBody2D" parent="Platforms"]
+position = Vector2(0, -290)
+script = ExtResource("5_mplat")
+move_direction = Vector2(0, -1)
+move_speed = 80.0
+move_distance = 80.0
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="Platforms/Plat_TopCenter"]
+shape = SubResource("plat_h")
+
+[node name="Polygon2D" type="Polygon2D" parent="Platforms/Plat_TopCenter"]
+polygon = PackedVector2Array(-80, -5, 80, -5, 80, 5, -80, 5)
+color = Color(0.3, 0.5, 0.2, 1)
+
+[node name="Plat_LeftHigh" type="AnimatableBody2D" parent="Platforms"]
+position = Vector2(-380, -200)
+script = ExtResource("5_mplat")
+move_direction = Vector2(1, -1)
+move_speed = 90.0
+move_distance = 100.0
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="Platforms/Plat_LeftHigh"]
+shape = SubResource("plat_h")
+
+[node name="Polygon2D" type="Polygon2D" parent="Platforms/Plat_LeftHigh"]
+polygon = PackedVector2Array(-80, -5, 80, -5, 80, 5, -80, 5)
+color = Color(0.3, 0.5, 0.2, 1)
+
+[node name="Plat_RightHigh" type="AnimatableBody2D" parent="Platforms"]
+position = Vector2(380, -100)
+script = ExtResource("5_mplat")
+move_direction = Vector2(-1, 1)
+move_speed = 110.0
+move_distance = 120.0
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="Platforms/Plat_RightHigh"]
+shape = SubResource("plat_h")
+
+[node name="Polygon2D" type="Polygon2D" parent="Platforms/Plat_RightHigh"]
+polygon = PackedVector2Array(-80, -5, 80, -5, 80, 5, -80, 5)
+color = Color(0.3, 0.5, 0.2, 1)
+
 [node name="Ship" type="CharacterBody2D" parent="."]
-position = Vector2(0, 0)
+position = Vector2(0, -300)
 script = ExtResource("1_ship")
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="Ship"]
@@ -80,7 +146,7 @@ polygon = PackedVector2Array(-8, -20, 8, -20, 8, -8, -8, -8)
 color = Color(0.25, 0.65, 1.0, 1)
 
 [node name="Anchor" type="RigidBody2D" parent="."]
-position = Vector2(0, 0)
+position = Vector2(0, -300)
 script = ExtResource("2_anchor")
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="Anchor"]
@@ -108,6 +174,9 @@ color = Color(0.35, 0.35, 0.35, 1)
 
 [node name="AnchorWorm" parent="." instance=ExtResource("4_worm")]
 
+[node name="Worm2" parent="." instance=ExtResource("4_worm")]
+position = Vector2(-200, 300)
+
 [node name="UI" type="CanvasLayer" parent="."]
 script = ExtResource("3_ui")
 
@@ -117,12 +186,12 @@ anchor_left = 0.5
 anchor_top = 0.0
 anchor_right = 0.5
 anchor_bottom = 0.0
-offset_left = -200.0
+offset_left = -220.0
 offset_top = 12.0
-offset_right = 200.0
+offset_right = 220.0
 offset_bottom = 48.0
 grow_horizontal = 2
-text = "⚓ ANCHOR BRAWL ⚓"
+text = "⚓ ANCHOR JUMP ⚓"
 horizontal_alignment = 1
 vertical_alignment = 1
 
@@ -132,12 +201,12 @@ anchor_left = 0.5
 anchor_top = 1.0
 anchor_right = 0.5
 anchor_bottom = 1.0
-offset_left = -400.0
+offset_left = -420.0
 offset_top = -56.0
-offset_right = 400.0
+offset_right = 420.0
 offset_bottom = -12.0
 grow_horizontal = 2
 grow_vertical = 0
-text = "WASD / ←↑↓→ 移动(拖拉机手感)  |  空格 / F 抛锚  |  E 路怒击飞  |  鼠标左键 钩爪  |  锚自动回收"
+text = "A/D ←→ 移动  |  空格/W/↑ 跳跃  |  F 抛锚  |  ← 鼠标钩爪 →  |  E 路怒  |  锚闲置3秒自动隐藏"
 horizontal_alignment = 1
 vertical_alignment = 1

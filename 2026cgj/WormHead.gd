@@ -143,20 +143,21 @@ func _steer_away_from_walls(delta: float) -> void:
 	var steer := Vector2.ZERO
 
 	if p.x < -BOX_HW + WALL_MARGIN:
-		steer.x += smoothstep(-BOX_HW + WALL_MARGIN, -BOX_HW, p.x)
+		steer.x += clamp((p.x - (-BOX_HW + WALL_MARGIN)) / (-BOX_HW - (-BOX_HW + WALL_MARGIN)), 0.0, 1.0)
 	elif p.x > BOX_HW - WALL_MARGIN:
-		steer.x -= smoothstep(BOX_HW - WALL_MARGIN, BOX_HW, p.x)
+		steer.x -= clamp((p.x - (BOX_HW - WALL_MARGIN)) / (BOX_HW - (BOX_HW - WALL_MARGIN)), 0.0, 1.0)
 
 	if p.y < -BOX_HH + WALL_MARGIN:
-		steer.y += smoothstep(-BOX_HH + WALL_MARGIN, -BOX_HH, p.y)
+		steer.y += clamp((p.y - (-BOX_HH + WALL_MARGIN)) / (-BOX_HH - (-BOX_HH + WALL_MARGIN)), 0.0, 1.0)
 	elif p.y > BOX_HH - WALL_MARGIN:
-		steer.y -= smoothstep(BOX_HH - WALL_MARGIN, BOX_HH, p.y)
+		steer.y -= clamp((p.y - (BOX_HH - WALL_MARGIN)) / (BOX_HH - (BOX_HH - WALL_MARGIN)), 0.0, 1.0)
 
 	if steer.length() > 0.001:
 		# 将当前速度向避让方向旋转，而非直接叠加
 		var target_dir := steer.normalized()
 		var current_dir := velocity.normalized() if velocity.length() > 0.01 else target_dir
-		var blended := current_dir.lerp(target_dir, clamp(WALL_FORCE * delta, 0.0, 1.0)).normalized()
+		var blended: Vector2 = current_dir.lerp(target_dir, clamp(WALL_FORCE * delta, 0.0, 1.0))
+		blended = blended.normalized()
 		velocity = blended * velocity.length()
 
 func _hard_clamp() -> void:

@@ -23,6 +23,10 @@ func _ready() -> void:
 	physics_material_override = PhysicsMaterial.new()
 	physics_material_override.bounce = 0.9
 	body_entered.connect(_on_body_entered)
+	# 初始隐藏
+	visible = false
+	freeze = true
+
 
 	# 【锚格分裂】随机间隔抽风
 	crazy_timer = Timer.new()
@@ -48,10 +52,28 @@ func _integrate_forces(state: PhysicsDirectBodyState2D) -> void:
 		if vel_length > STOP_THRESHOLD:
 			reset_to_ship(ship)
 
+func show_anchor(at_ship: CharacterBody2D) -> void:
+	visible = true
+	ship = at_ship
+	global_position = ship.global_position
+	linear_velocity = Vector2.ZERO
+	angular_velocity = 0.0
+	freeze = true
+
+func hide_anchor() -> void:
+	visible = false
+	release_grapple()
+	thrown = false
+	timer = 0.0
+	linear_velocity = Vector2.ZERO
+	angular_velocity = 0.0
+	freeze = true
+
 func throw(from_ship: CharacterBody2D) -> void:
 	ship = from_ship
 	thrown = true
 	timer = 0.0
+	visible = true
 
 	# 清除钩爪状态
 	release_grapple()
@@ -87,6 +109,8 @@ func reset_to_ship(from_ship: CharacterBody2D) -> void:
 	freeze = true
 	global_position = ship.global_position
 	scale = Vector2.ONE
+	# 回收后自动隐藏
+	visible = false
 
 func _on_body_entered(body: Node) -> void:
 	if not thrown:
