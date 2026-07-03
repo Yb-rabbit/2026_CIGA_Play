@@ -1,0 +1,140 @@
+[gd_scene load_steps=8 format=3 uid="uid://dq8m7n3xp2ky1"]
+
+[ext_resource type="Script" path="res://ship.gd" id="1_ship"]
+[ext_resource type="Script" path="res://anchor.gd" id="2_anchor"]
+[ext_resource type="Script" path="res://ui.gd" id="3_ui"]
+
+[sub_resource type="RectangleShape2D" id="wall_h"]
+size = Vector2(1024, 16)
+
+[sub_resource type="RectangleShape2D" id="wall_v"]
+size = Vector2(16, 768)
+
+[sub_resource type="RectangleShape2D" id="ship_shape"]
+size = Vector2(40, 40)
+
+[sub_resource type="CircleShape2D" id="anchor_shape"]
+radius = 14.0
+
+[node name="Main" type="Node2D"]
+
+[node name="Camera2D" type="Camera2D" parent="."]
+position = Vector2(0, 0)
+
+[node name="Walls" type="Node2D" parent="."]
+
+[node name="WallTop" type="StaticBody2D" parent="Walls"]
+position = Vector2(0, -376)
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="Walls/WallTop"]
+shape = SubResource("wall_h")
+
+[node name="Polygon2D" type="Polygon2D" parent="Walls/WallTop"]
+polygon = PackedVector2Array(-512, -8, 512, -8, 512, 8, -512, 8)
+color = Color(0.25, 0.25, 0.25, 1)
+
+[node name="WallBottom" type="StaticBody2D" parent="Walls"]
+position = Vector2(0, 376)
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="Walls/WallBottom"]
+shape = SubResource("wall_h")
+
+[node name="Polygon2D" type="Polygon2D" parent="Walls/WallBottom"]
+polygon = PackedVector2Array(-512, -8, 512, -8, 512, 8, -512, 8)
+color = Color(0.25, 0.25, 0.25, 1)
+
+[node name="WallLeft" type="StaticBody2D" parent="Walls"]
+position = Vector2(-504, 0)
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="Walls/WallLeft"]
+shape = SubResource("wall_v")
+
+[node name="Polygon2D" type="Polygon2D" parent="Walls/WallLeft"]
+polygon = PackedVector2Array(-8, -384, 8, -384, 8, 384, -8, 384)
+color = Color(0.25, 0.25, 0.25, 1)
+
+[node name="WallRight" type="StaticBody2D" parent="Walls"]
+position = Vector2(504, 0)
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="Walls/WallRight"]
+shape = SubResource("wall_v")
+
+[node name="Polygon2D" type="Polygon2D" parent="Walls/WallRight"]
+polygon = PackedVector2Array(-8, -384, 8, -384, 8, 384, -8, 384)
+color = Color(0.25, 0.25, 0.25, 1)
+
+[node name="Ship" type="CharacterBody2D" parent="."]
+position = Vector2(0, 0)
+script = ExtResource("1_ship")
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="Ship"]
+shape = SubResource("ship_shape")
+
+[node name="ShipHull" type="Polygon2D" parent="Ship"]
+polygon = PackedVector2Array(-18, -12, 18, -12, 22, 8, -22, 8)
+color = Color(0.15, 0.5, 0.8, 1)
+
+[node name="ShipBridge" type="Polygon2D" parent="Ship"]
+polygon = PackedVector2Array(-8, -20, 8, -20, 8, -8, -8, -8)
+color = Color(0.25, 0.65, 1.0, 1)
+
+[node name="Anchor" type="RigidBody2D" parent="."]
+position = Vector2(0, 0)
+script = ExtResource("2_anchor")
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="Anchor"]
+shape = SubResource("anchor_shape")
+
+[node name="Ring" type="Polygon2D" parent="Anchor"]
+polygon = PackedVector2Array(-6, -14, 6, -14, 6, -8, -6, -8)
+color = Color(0.5, 0.5, 0.5, 1)
+
+[node name="Shaft" type="Polygon2D" parent="Anchor"]
+polygon = PackedVector2Array(-3, -8, 3, -8, 3, 10, -3, 10)
+color = Color(0.45, 0.45, 0.45, 1)
+
+[node name="Crossbar" type="Polygon2D" parent="Anchor"]
+polygon = PackedVector2Array(-10, -4, 10, -4, 10, 0, -10, 0)
+color = Color(0.45, 0.45, 0.45, 1)
+
+[node name="FlukeLeft" type="Polygon2D" parent="Anchor"]
+polygon = PackedVector2Array(-3, 8, -10, 14, -3, 14)
+color = Color(0.35, 0.35, 0.35, 1)
+
+[node name="FlukeRight" type="Polygon2D" parent="Anchor"]
+polygon = PackedVector2Array(3, 8, 10, 14, 3, 14)
+color = Color(0.35, 0.35, 0.35, 1)
+
+[node name="UI" type="CanvasLayer" parent="."]
+script = ExtResource("3_ui")
+
+[node name="TitleLabel" type="Label" parent="UI"]
+anchors_preset = 5
+anchor_left = 0.5
+anchor_top = 0.0
+anchor_right = 0.5
+anchor_bottom = 0.0
+offset_left = -200.0
+offset_top = 12.0
+offset_right = 200.0
+offset_bottom = 48.0
+grow_horizontal = 2
+text = "⚓ ANCHOR BRAWL ⚓"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="HintLabel" type="Label" parent="UI"]
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+offset_left = -400.0
+offset_top = -56.0
+offset_right = 400.0
+offset_bottom = -12.0
+grow_horizontal = 2
+grow_vertical = 0
+text = "WASD / ←↑↓→ 移动(拖拉机手感)  |  空格 / F 抛锚  |  E 路怒击飞  |  锚自动回收"
+horizontal_alignment = 1
+vertical_alignment = 1
