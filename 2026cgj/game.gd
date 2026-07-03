@@ -12,6 +12,7 @@ const FUEL_REFILL: float = 55.0            # 救援成功回油量
 var score: int = 0
 var rescue_count: int = 0
 var game_over: bool = false
+var rescuing: bool = false       # 正在播放救援缩放动画
 
 # ==================== 风场 ====================
 var wind_vector: Vector2 = Vector2(50.0, -30.0)  # 初始微风
@@ -32,16 +33,28 @@ var flame_poly: Polygon2D
 var anchor: Area2D
 var hex_poly: Polygon2D          # 六边形填充（呼吸动效用）
 var hex_border: Line2D           # 六边形边框（呼吸动效用）
+var rescue_ring: Line2D          # 救援范围圈（可视化）
 var camera: Camera2D
 var angular_velocity: float = 0.0
 
+# 速度矢量虚线系统
+const DASH_COUNT := 8
+const DASH_LEN := 10.0
+const DASH_GAP := 14.0
+const DASH_MAX := 180.0
+const DASH_FLOW_SPEED := 90.0   # 流量速率，不随速度变化
+var dash_offset: float = 0.0
+var trail_node: Node2D
+
 # UI
 var compass_needle: Sprite2D
+var compass_ripple: Sprite2D     # 罗盘水纹涟漪
 var fuel_fill: ColorRect
 var score_label: Label
 var dist_label: Label
 var hint_label: Label
 var game_over_label: Label
+var signal_label: Label           # 就近信号报告
 
 
 # ============================================================
@@ -49,6 +62,12 @@ var game_over_label: Label
 # ============================================================
 func _ready() -> void:
 	RenderingServer.set_default_clear_color(Color(0.02, 0.04, 0.16, 1.0))
+
+	# 创建轨迹绘制节点
+	trail_node = Node2D.new()
+	trail_node.name = "TrailNode"
+	add_child(trail_node)
+	trail_node.draw.connect(_draw_trail)
 
 	_build_player()
 	_build_camera()
@@ -66,14 +85,12 @@ func _build_player() -> void:
 	player.position = Vector2.ZERO
 	add_child(player)
 
-	# 碰撞体
 	var col_shape := CollisionShape2D.new()
 	var circle := CircleShape2D.new()
 	circle.radius = 10.0
 	col_shape.shape = circle
 	player.add_child(col_shape)
 
-	# 飞机机身 — 白色三角形
 	body_poly = Polygon2D.new()
 	body_poly.name = "Body"
 	body_poly.polygon = PackedVector2Array([
@@ -85,7 +102,6 @@ func _build_player() -> void:
 	body_poly.color = Color(0.9, 0.95, 1.0)
 	player.add_child(body_poly)
 
-	# 尾焰 — 加速时可见
 	flame_poly = Polygon2D.new()
 	flame_poly.name = "Flame"
 	flame_poly.polygon = PackedVector2Array([
@@ -105,7 +121,7 @@ func _build_camera() -> void:
 	camera = Camera2D.new()
 	camera.name = "Camera2D"
 	camera.enabled = true
-	add_child(camera)  # 挂根节点，不继承 Player 旋转
+	add_child(camera)
 
 
 # ============================================================
@@ -116,14 +132,12 @@ func _build_anchor() -> void:
 	anchor.name = "Anchor"
 	add_child(anchor)
 
-	# 碰撞区域
 	var col_shape := CollisionShape2D.new()
 	var circle := CircleShape2D.new()
-	circle.radius = 28.0
+	circle.radius = 48.0
 	col_shape.shape = circle
 	anchor.add_child(col_shape)
 
-	# 六边形 — 红色填充（赋值给成员变量 hex_poly，用于动效）
 	hex_poly = Polygon2D.new()
 	hex_poly.name = "HexBody"
 	const R := 22.0
@@ -135,7 +149,6 @@ func _build_anchor() -> void:
 	hex_poly.color = Color(1.0, 0.25, 0.2, 0.9)
 	anchor.add_child(hex_poly)
 
-	# 六边形边框 — 白色（赋值给成员变量 hex_border）
 	hex_border = Line2D.new()
 	hex_border.name = "HexBorder"
 	hex_border.width = 1.5
@@ -148,7 +161,20 @@ func _build_anchor() -> void:
 	hex_border.points = bpts
 	anchor.add_child(hex_border)
 
-	# 碰撞信号
+	# 救援范围可视化圈（半径 48，匹配碰撞体，淡蓝色半透明）
+	rescue_ring = Line2D.new()
+	rescue_ring.name = "RescueRing"
+	rescue_ring.width = 1.2
+	rescue_ring.default_color = Color(0.3, 0.8, 1.0, 0.35)
+	rescue_ring.closed = true
+	const SEG := 64
+	var rpts := PackedVector2Array()
+	for i: int in range(SEG + 1):
+		var ra: float = TAU * float(i) / float(SEG)
+		rpts.append(Vector2(cos(ra), sin(ra)) * 48.0)
+	rescue_ring.points = rpts
+	anchor.add_child(rescue_ring)
+
 	anchor.body_entered.connect(_on_rescue)
 
 
@@ -163,77 +189,94 @@ func _build_ui() -> void:
 	# ---- 罗盘 (右上) ----
 	var cc := Control.new()
 	cc.name = "Compass"
-	cc.position = Vector2(1280 - 170, 14)
-	cc.size = Vector2(150, 150)
+	cc.position = Vector2(1280 - 190, 14)
+	cc.size = Vector2(190, 190)
 	ui.add_child(cc)
 
-	# 罗盘底盘
 	var face := Sprite2D.new()
-	face.position = Vector2(75, 75)
+	face.position = Vector2(95, 95)
 	face.texture = _make_compass_tex()
+	face.scale = Vector2(1.25, 1.25)
 	cc.add_child(face)
 
-	# 指针
 	compass_needle = Sprite2D.new()
-	compass_needle.position = Vector2(75, 75)
+	compass_needle.position = Vector2(95, 95)
 	compass_needle.texture = _make_needle_tex()
 	cc.add_child(compass_needle)
+
+	# 水纹涟漪环（搜索动效）
+	compass_ripple = Sprite2D.new()
+	compass_ripple.name = "Ripple"
+	compass_ripple.position = Vector2(95, 95)
+	compass_ripple.texture = _make_ripple_tex()
+	compass_ripple.visible = false
+	cc.add_child(compass_ripple)
 
 	# ---- 油量条 (左上) ----
 	var bg := ColorRect.new()
 	bg.position = Vector2(20, 20)
-	bg.size = Vector2(180, 22)
+	bg.size = Vector2(240, 28)
 	bg.color = Color(0.1, 0.1, 0.15, 0.85)
 	ui.add_child(bg)
 
 	fuel_fill = ColorRect.new()
-	fuel_fill.position = Vector2(22, 22)
-	fuel_fill.size = Vector2(176, 18)
+	fuel_fill.position = Vector2(24, 24)
+	fuel_fill.size = Vector2(232, 20)
 	fuel_fill.color = Color(0.2, 0.85, 0.5, 0.9)
 	ui.add_child(fuel_fill)
 
 	var fl := Label.new()
-	fl.position = Vector2(20, 46)
+	fl.position = Vector2(20, 56)
 	fl.text = "FUEL"
-	fl.add_theme_font_size_override("font_size", 10)
+	fl.add_theme_font_size_override("font_size", 20)
 	fl.add_theme_color_override("font_color", Color(0.4, 0.8, 0.9, 0.8))
 	ui.add_child(fl)
 
 	# ---- 分数 ----
 	score_label = Label.new()
-	score_label.position = Vector2(20, 62)
+	score_label.position = Vector2(20, 78)
 	score_label.text = "救援: 0"
-	score_label.add_theme_font_size_override("font_size", 16)
+	score_label.add_theme_font_size_override("font_size", 32)
 	score_label.add_theme_color_override("font_color", Color(1.0, 0.9, 0.3, 0.9))
 	ui.add_child(score_label)
 
 	# ---- 距离 (罗盘下方) ----
 	dist_label = Label.new()
-	dist_label.position = Vector2(1280 - 170, 168)
-	dist_label.size = Vector2(150, 24)
+	dist_label.position = Vector2(1280 - 190, 210)
+	dist_label.size = Vector2(190, 28)
 	dist_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	dist_label.add_theme_font_size_override("font_size", 11)
+	dist_label.add_theme_font_size_override("font_size", 22)
 	dist_label.add_theme_color_override("font_color", Color(0.5, 0.8, 1.0, 0.7))
 	ui.add_child(dist_label)
+
+	# ---- 就近信号报告 (罗盘下方第二条) ----
+	signal_label = Label.new()
+	signal_label.position = Vector2(1280 - 190, 240)
+	signal_label.size = Vector2(190, 32)
+	signal_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	signal_label.add_theme_font_size_override("font_size", 24)
+	signal_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.5, 0.0))
+	signal_label.text = "搜索中..."
+	ui.add_child(signal_label)
 
 	# ---- 操作提示 ----
 	hint_label = Label.new()
 	hint_label.anchors_preset = Control.PRESET_CENTER_BOTTOM
-	hint_label.position = Vector2(-230, -30)
-	hint_label.size = Vector2(460, 24)
+	hint_label.position = Vector2(-280, -36)
+	hint_label.size = Vector2(560, 30)
 	hint_label.text = "A/D 旋转 | W 加速 | S 减速 | 指针指上 = 对准目标"
 	hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	hint_label.add_theme_font_size_override("font_size", 12)
+	hint_label.add_theme_font_size_override("font_size", 24)
 	hint_label.add_theme_color_override("font_color", Color(0.4, 0.7, 0.9, 0.7))
 	ui.add_child(hint_label)
 
 	# ---- Game Over ----
 	game_over_label = Label.new()
 	game_over_label.visible = false
-	game_over_label.text = "燃料耗尽\n按 R 重新开始"
+	game_over_label.text = "燃料耗尽...\n按 R 重新开始"
 	game_over_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	game_over_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	game_over_label.add_theme_font_size_override("font_size", 36)
+	game_over_label.add_theme_font_size_override("font_size", 64)
 	game_over_label.add_theme_color_override("font_color", Color(1.0, 0.2, 0.2, 1.0))
 	game_over_label.set_anchors_preset(Control.PRESET_CENTER)
 	ui.add_child(game_over_label)
@@ -257,7 +300,6 @@ func _make_compass_tex() -> ImageTexture:
 			elif d < r - 3.0 and d > 5.0:
 				img.set_pixel(x, y, Color(0.06, 0.08, 0.16, 0.85))
 
-	# 四个刻度
 	var tc := Color(0.3, 0.9, 1.0, 0.95)
 	for i: int in range(4):
 		var a: float = i * PI / 2.0 - PI / 2.0
@@ -282,6 +324,22 @@ func _make_needle_tex() -> ImageTexture:
 	return ImageTexture.create_from_image(img)
 
 
+func _make_ripple_tex() -> ImageTexture:
+	## 水纹涟漪纹理：透明圆形环，用于搜索雷达扫描
+	const S := 180
+	var img := Image.create(S, S, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0, 0, 0, 0))
+	var c := Vector2(S / 2.0, S / 2.0)
+	# 绘制波纹状半透明圆环
+	for y: int in range(S):
+		for x: int in range(S):
+			var d: float = Vector2(x, y).distance_to(c)
+			# 外圈粗线
+			if d >= 84.0 and d <= 88.0:
+				img.set_pixel(x, y, Color(0.2, 0.7, 1.0, 0.4))
+	return ImageTexture.create_from_image(img)
+
+
 func _draw_line_on_img(img: Image, f: Vector2, t: Vector2, th: float, col: Color) -> void:
 	var dir := (t - f).normalized()
 	var perp := Vector2(-dir.y, dir.x)
@@ -302,33 +360,41 @@ func _spawn_anchor() -> void:
 	var a: float = randf_range(0.0, TAU)
 	var d: float = randf_range(300.0, 550.0)
 	anchor.global_position = player.global_position + Vector2.RIGHT.rotated(a) * d
-	# 新信标重置缩放
 	hex_poly.scale = Vector2.ONE
 	hex_border.scale = Vector2.ONE
+	rescue_ring.scale = Vector2.ONE
 
 
 # ============================================================
 # 救援成功
 # ============================================================
 func _on_rescue(_b: Node2D) -> void:
-	if game_over:
+	if game_over or rescuing:
 		return
+	rescuing = true
 	rescue_count += 1
 	score += int(100 + rescue_count * 15)
 	fuel = minf(fuel_max, fuel + FUEL_REFILL)
 	score_label.text = "救援: %d" % score
 
-	# 难度递增
 	var na: float = randf_range(0.0, TAU)
 	var ns: float = BASE_WIND + float(rescue_count) * 25.0
 	wind_vector = Vector2.RIGHT.rotated(na) * ns
 
-	_spawn_anchor()
-
-	# 闪烁反馈
+	# 缩放消失动画：六边形+边框+救援圈 同时向中心缩至零
 	var tw := create_tween()
-	tw.tween_property(score_label, "modulate", Color.WHITE, 0.08)
-	tw.tween_property(score_label, "modulate", Color(1.0, 0.9, 0.3, 0.9), 0.25)
+	tw.set_parallel(true)
+	tw.tween_property(hex_poly, "scale", Vector2.ZERO, 0.35).set_ease(Tween.EASE_IN)
+	tw.tween_property(hex_border, "scale", Vector2.ZERO, 0.35).set_ease(Tween.EASE_IN)
+	tw.tween_property(rescue_ring, "scale", Vector2.ZERO, 0.35).set_ease(Tween.EASE_IN)
+
+	# 分数闪烁
+	var tw2 := create_tween()
+	tw2.tween_property(score_label, "modulate", Color.WHITE, 0.08)
+	tw2.tween_property(score_label, "modulate", Color(1.0, 0.9, 0.3, 0.9), 0.25)
+
+	# 动画完成后生成新信标
+	tw.finished.connect(_on_rescue_done)
 
 
 # ============================================================
@@ -366,13 +432,11 @@ func _physics_process(delta: float) -> void:
 		_update_compass()
 		return
 
-	# 1. 旋转（带角动量惯性）
 	var ri: float = Input.get_axis("ui_left", "ui_right")
 	angular_velocity += ri * ROT_ACCEL * delta
 	angular_velocity *= ROT_DRAG
 	player.rotation += angular_velocity * delta
 
-	# 2. 推进 + 油耗
 	var thrusting: bool = Input.is_action_pressed("ui_up") and fuel > 0.0
 	if thrusting:
 		player.velocity += Vector2.RIGHT.rotated(player.rotation) * THRUST * delta
@@ -380,42 +444,36 @@ func _physics_process(delta: float) -> void:
 		if fuel <= 0.0:
 			_game_over()
 
-	# 2.5. S 键减速
 	if Input.is_action_pressed("ui_down"):
 		var spd: float = player.velocity.length()
 		if spd > 0.0:
 			var force: float = minf(BRAKE * delta, spd)
 			player.velocity -= player.velocity.normalized() * force
 
-	# 3. 风场
 	player.velocity += wind_vector * delta
-
-	# 4. 惯性
 	player.velocity *= LIN_DRAG
 
-	# 5. 限速
 	var sp: float = player.velocity.length()
 	if sp > MAX_SPD:
 		player.velocity = player.velocity * (MAX_SPD / sp)
 
-	# 5.5 六边形呼吸动效
 	_animate_hexagon()
-
-	# 6. 移动
 	player.move_and_slide()
-
-	# 7. 边界
 	_wrap(player)
 
-	# 8. 尾焰
 	flame_poly.visible = thrusting
 	if thrusting:
 		_anim_flame()
 
-	# 9. 相机
 	camera.global_position = player.global_position
 
-	# 10. UI
+	# 速度虚线流动偏移
+	dash_offset += DASH_FLOW_SPEED * delta
+	if dash_offset > DASH_GAP + DASH_LEN:
+		dash_offset -= DASH_GAP + DASH_LEN
+
+	trail_node.queue_redraw()
+
 	_update_compass()
 	_update_fuel()
 
@@ -431,14 +489,11 @@ func _process(_delta: float) -> void:
 func _update_compass() -> void:
 	var to: Vector2 = anchor.global_position - player.global_position
 	var dist: float = to.length()
-	dist_label.text = "距离: %.0f px" % dist
+	dist_label.text = "最近距离: %.0f pc" % dist
 
 	if dist > 0.5:
-		# relative_bearing = world_angle_to_target - player_facing_angle
-		# 指针纹理天生朝上 → rotation=0 时指针指向上方
 		compass_needle.rotation = to.angle() - player.rotation
 
-	# 距离反馈: 近→绿+快闪, 远→红+慢闪
 	var t: float = clampi(int(dist), 0, 500) / 500.0
 	compass_needle.modulate = Color(
 		lerpf(0.25, 1.0, 1.0 - t),
@@ -449,13 +504,24 @@ func _update_compass() -> void:
 	var blink: float = sin(Time.get_ticks_msec() * 0.003 * lerpf(0.8, 6.0, 1.0 - t)) * 0.25 + 0.75
 	compass_needle.modulate.a *= blink
 
+	# 水纹涟漪：距离越近 → 涟漪越大、透明度越低
+	compass_ripple.visible = true
+	var ripple_scale: float = lerpf(0.3, 1.1, 1.0 - t)  # 远=小圈, 近=大圈扩展
+	var ripple_alpha: float = lerpf(0.05, 0.5, 1.0 - t)  # 远=极淡, 近=清晰
+	compass_ripple.scale = Vector2(ripple_scale, ripple_scale)
+	compass_ripple.modulate.a = ripple_alpha
+	# 缓慢旋转涟漪
+	compass_ripple.rotation += 0.008
+
+	_update_signal_report(dist)
+
 
 # ============================================================
 # 油量条
 # ============================================================
 func _update_fuel() -> void:
 	var r: float = fuel / fuel_max
-	fuel_fill.size.x = 176.0 * r
+	fuel_fill.size.x = 232.0 * r
 	if r > 0.4:
 		fuel_fill.color = Color(0.2, 0.85, 0.5, 0.9)
 	elif r > 0.15:
@@ -465,16 +531,86 @@ func _update_fuel() -> void:
 
 
 # ============================================================
-# 六边形呼吸动效 — 缓慢缩放 + 颜色脉动
-# 给予玩家直观的"靠近它"的感觉
+# 就近信号报告
+# ============================================================
+func _update_signal_report(dist: float) -> void:
+	if dist > 500.0:
+		signal_label.text = "搜索中..."
+		signal_label.add_theme_color_override("font_color", Color(0.4, 0.6, 0.8, 0.4))
+	elif dist > 250.0:
+		signal_label.text = "信号微弱"
+		signal_label.add_theme_color_override("font_color", Color(0.6, 0.7, 0.9, 0.6))
+	elif dist > 120.0:
+		signal_label.text = "信号增强"
+		var pulse: float = sin(Time.get_ticks_msec() * 0.005) * 0.15 + 0.85
+		signal_label.add_theme_color_override("font_color", Color(0.8, 0.9, 1.0, pulse))
+	elif dist > 40.0:
+		signal_label.text = "信号强烈!"
+		var pulse: float = sin(Time.get_ticks_msec() * 0.01) * 0.3 + 0.7
+		signal_label.add_theme_color_override("font_color", Color(1.0, 1.0, 0.5, pulse))
+	else:
+		signal_label.text = ">>> 已到达 <<<"
+		var flash: float = sin(Time.get_ticks_msec() * 0.015) * 0.5 + 0.5
+		signal_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.4, 0.7 + flash * 0.3))
+
+
+# ============================================================
+# 速度矢量虚线 — 从飞机尾部沿实际运动方向绘制流动虚线
+# 帮助玩家可视化"风偏后我实际在往哪飞"
+# ============================================================
+func _draw_trail() -> void:
+	if game_over or player.velocity.length() < 5.0:
+		return
+
+	# 速度方向（世界坐标）— 飞机实际的运动方向
+	var vel_dir: Vector2 = player.velocity.normalized()
+	var vel_len: float = player.velocity.length()
+	# 轨迹长度与速度成正比（快=远，慢=近）
+	var trail_len: float = clamp(vel_len * 0.45, 30.0, DASH_MAX)
+
+	# 颜色：青色荧光，速度越快越亮
+	var alpha: float = clamp(vel_len / 180.0, 0.1, 0.55)
+	var dash_color := Color(0.1, 0.95, 1.0, alpha)
+
+	# 从飞机前方开始，沿速度方向画出流动虚线
+	var start_pos: Vector2 = player.global_position + vel_dir * 6.0
+	var offset: float = dash_offset
+
+	var pos: float = 0.0
+	var drawing := true
+	while pos < trail_len:
+		var seg_end: float = minf(pos + (DASH_LEN if drawing else DASH_GAP), trail_len)
+		if drawing:
+			var from: Vector2 = start_pos + vel_dir * pos
+			var to: Vector2 = start_pos + vel_dir * seg_end
+			# offset 实现虚线向飞机方向流动
+			from -= vel_dir * offset
+			to -= vel_dir * offset
+			# 越远处越淡，营造渐隐效果
+			var fade: float = 1.0 - (pos / trail_len)
+			var col := Color(dash_color, dash_color.a * fade)
+			trail_node.draw_line(from, to, col, 1.3)
+		pos = seg_end
+		drawing = not drawing
+
+# ============================================================
+func _on_rescue_done() -> void:
+	## 缩放动画结束后重新生成信标并恢复状态
+	_spawn_anchor()
+	rescuing = false
+
+# ============================================================
+# 六边形呼吸动效 + 救援圈同步（救援动画期间跳过）
 # ============================================================
 func _animate_hexagon() -> void:
-	# 呼吸周期约 2 秒，缩放范围 0.92 ~ 1.08
+	if rescuing:
+		return
 	var breath: float = sin(Time.get_ticks_msec() * 0.0015) * 0.08 + 1.0
 	hex_poly.scale = Vector2(breath, breath)
 	hex_border.scale = Vector2(breath, breath)
+	rescue_ring.scale = Vector2(breath, breath)
+	rescue_ring.default_color.a = 0.2 + breath * 0.2
 
-	# 颜色亮度随呼吸微调
 	var bright: float = 0.75 + breath * 0.25
 	hex_poly.color = Color(1.0 * bright, 0.25 * bright, 0.2 * bright, 0.9)
 
