@@ -1,8 +1,9 @@
-[gd_scene load_steps=8 format=3 uid="uid://dq8m7n3xp2ky1"]
+[gd_scene load_steps=9 format=3 uid="uid://dq8m7n3xp2ky1"]
 
 [ext_resource type="Script" path="res://ship.gd" id="1_ship"]
 [ext_resource type="Script" path="res://anchor.gd" id="2_anchor"]
 [ext_resource type="Script" path="res://ui.gd" id="3_ui"]
+[ext_resource type="PackedScene" path="res://AnchorWorm.tscn" id="4_worm"]
 
 [sub_resource type="RectangleShape2D" id="wall_h"]
 size = Vector2(1024, 16)
@@ -105,6 +106,8 @@ color = Color(0.35, 0.35, 0.35, 1)
 polygon = PackedVector2Array(3, 8, 10, 14, 3, 14)
 color = Color(0.35, 0.35, 0.35, 1)
 
+[node name="AnchorWorm" parent="." instance=ExtResource("4_worm")]
+
 [node name="UI" type="CanvasLayer" parent="."]
 script = ExtResource("3_ui")
 
@@ -135,6 +138,6 @@ offset_right = 400.0
 offset_bottom = -12.0
 grow_horizontal = 2
 grow_vertical = 0
-text = "WASD / ←↑↓→ 移动(拖拉机手感)  |  空格 / F 抛锚  |  E 路怒击飞  |  锚自动回收"
+text = "WASD / ←↑↓→ 移动(拖拉机手感)  |  空格 / F 抛锚  |  E 路怒击飞  |  鼠标左键 钩爪  |  锚自动回收"
 horizontal_alignment = 1
 vertical_alignment = 1

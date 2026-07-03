@@ -11,17 +11,19 @@ config_version=5
 [application]
 
 config/name="2026CGJ"
+run/main_scene="res://Main.tscn"
 config/features=PackedStringArray("4.7", "Forward Plus")
 config/icon="res://icon.svg"
 
-run/main_scene="res://Main.tscn"
+[debug]
+
+file_logging/enable_file_logging=true
 
 [display]
 
 window/size/viewport_width=1024
 window/size/viewport_height=768
 window/stretch/mode="canvas_items"
-window/stretch/aspect="keep"
 
 [editor_plugins]
 
@@ -29,6 +31,12 @@ enabled=PackedStringArray("res://addons/godot_mcp/plugin.cfg")
 
 [input]
 
+ui_accept={
+"deadzone": 0.5,
+"events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":32,"physical_keycode":32,"key_label":32,"unicode":32,"location":0,"echo":false,"script":null)
+, Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":70,"physical_keycode":70,"key_label":70,"unicode":102,"location":0,"echo":false,"script":null)
+]
+}
 ui_left={
 "deadzone": 0.5,
 "events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":65,"physical_keycode":65,"key_label":65,"unicode":97,"location":0,"echo":false,"script":null)
@@ -53,12 +61,6 @@ ui_down={
 , Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":4194322,"physical_keycode":4194322,"key_label":0,"unicode":4194322,"location":0,"echo":false,"script":null)
 ]
 }
-ui_accept={
-"deadzone": 0.5,
-"events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":32,"physical_keycode":32,"key_label":32,"unicode":32,"location":0,"echo":false,"script":null)
-, Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":70,"physical_keycode":70,"key_label":70,"unicode":102,"location":0,"echo":false,"script":null)
-]
-}
 horn={
 "deadzone": 0.5,
 "events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":69,"physical_keycode":69,"key_label":69,"unicode":101,"location":0,"echo":false,"script":null)
@@ -70,13 +72,8 @@ hook={
 ]
 }
 
-[debug]
-
-file_logging/enable_file_logging=true
-
 [physics]
 
-common/physics_ticks_per_second=60
 3d/physics_engine="Jolt Physics"
 
 [rendering]
