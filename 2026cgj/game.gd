@@ -45,6 +45,7 @@ const DASH_MAX := 180.0
 const DASH_FLOW_SPEED := 90.0   # 流量速率，不随速度变化
 var dash_offset: float = 0.0
 var trail_node: Node2D
+var star_node: Node2D             # 星空绘制节点
 
 # UI
 var compass_needle: Sprite2D
@@ -62,6 +63,9 @@ var signal_label: Label           # 就近信号报告
 # ============================================================
 func _ready() -> void:
 	RenderingServer.set_default_clear_color(Color(0.02, 0.04, 0.16, 1.0))
+
+	# 创建星空背景节点
+	_build_stars()
 
 	# 创建轨迹绘制节点
 	trail_node = Node2D.new()
@@ -186,10 +190,13 @@ func _build_ui() -> void:
 	ui.name = "UI"
 	add_child(ui)
 
+	# 加载自定义字体（项目根目录下的 YuFanDanQingSong.otf）
+	var custom_font: Font = load("res://YuFanDanQingSong.otf")
+
 	# ---- 罗盘 (右上) ----
 	var cc := Control.new()
 	cc.name = "Compass"
-	cc.position = Vector2(1280 - 190, 14)
+	cc.position = Vector2(1600 - 190, 14)
 	cc.size = Vector2(190, 190)
 	ui.add_child(cc)
 
@@ -230,6 +237,7 @@ func _build_ui() -> void:
 	fl.text = "FUEL"
 	fl.add_theme_font_size_override("font_size", 20)
 	fl.add_theme_color_override("font_color", Color(0.4, 0.8, 0.9, 0.8))
+	fl.add_theme_font_override("font", custom_font)
 	ui.add_child(fl)
 
 	# ---- 分数 ----
@@ -238,24 +246,27 @@ func _build_ui() -> void:
 	score_label.text = "救援: 0"
 	score_label.add_theme_font_size_override("font_size", 32)
 	score_label.add_theme_color_override("font_color", Color(1.0, 0.9, 0.3, 0.9))
+	score_label.add_theme_font_override("font", custom_font)
 	ui.add_child(score_label)
 
 	# ---- 距离 (罗盘下方) ----
 	dist_label = Label.new()
-	dist_label.position = Vector2(1280 - 190, 210)
+	dist_label.position = Vector2(1600 - 210, 210)
 	dist_label.size = Vector2(190, 28)
 	dist_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	dist_label.add_theme_font_size_override("font_size", 22)
 	dist_label.add_theme_color_override("font_color", Color(0.5, 0.8, 1.0, 0.7))
+	dist_label.add_theme_font_override("font", custom_font)
 	ui.add_child(dist_label)
 
 	# ---- 就近信号报告 (罗盘下方第二条) ----
 	signal_label = Label.new()
-	signal_label.position = Vector2(1280 - 190, 240)
+	signal_label.position = Vector2(1600 - 210, 240)
 	signal_label.size = Vector2(190, 32)
 	signal_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	signal_label.add_theme_font_size_override("font_size", 24)
 	signal_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.5, 0.0))
+	signal_label.add_theme_font_override("font", custom_font)
 	signal_label.text = "搜索中..."
 	ui.add_child(signal_label)
 
@@ -268,6 +279,7 @@ func _build_ui() -> void:
 	hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hint_label.add_theme_font_size_override("font_size", 24)
 	hint_label.add_theme_color_override("font_color", Color(0.4, 0.7, 0.9, 0.7))
+	hint_label.add_theme_font_override("font", custom_font)
 	ui.add_child(hint_label)
 
 	# ---- Game Over ----
@@ -278,6 +290,7 @@ func _build_ui() -> void:
 	game_over_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	game_over_label.add_theme_font_size_override("font_size", 64)
 	game_over_label.add_theme_color_override("font_color", Color(1.0, 0.2, 0.2, 1.0))
+	game_over_label.add_theme_font_override("font", custom_font)
 	game_over_label.set_anchors_preset(Control.PRESET_CENTER)
 	ui.add_child(game_over_label)
 
@@ -360,6 +373,9 @@ func _spawn_anchor() -> void:
 	var a: float = randf_range(0.0, TAU)
 	var d: float = randf_range(300.0, 550.0)
 	anchor.global_position = player.global_position + Vector2.RIGHT.rotated(a) * d
+	# 确保信标不会生成在飞行范围外（与玩家使用同样的边界包装）
+	_wrap(anchor)
+
 	hex_poly.scale = Vector2.ONE
 	hex_border.scale = Vector2.ONE
 	rescue_ring.scale = Vector2.ONE
@@ -631,9 +647,42 @@ func _anim_flame() -> void:
 # ============================================================
 # 边界
 # ============================================================
+# ============================================================
+# 星空背景 — 随机散布半透明星点 + 微闪烁
+# ============================================================
+var _stars: PackedVector2Array
+var _stars_phase: Array[float]
+
+func _build_stars() -> void:
+	star_node = Node2D.new()
+	star_node.name = "Stars"
+	star_node.z_index = -10
+	add_child(star_node)
+
+	# 随机生成 80 颗星星
+	_stars.clear()
+	_stars_phase.clear()
+	for i: int in range(80):
+		_stars.append(Vector2(
+			randf_range(-1600.0, 1600.0),
+			randf_range(-1000.0, 1000.0)
+		))
+		_stars_phase.append(randf_range(0.0, TAU))
+
+	star_node.draw.connect(_draw_stars.bind(star_node))
+
+func _draw_stars(node: Node2D) -> void:
+	for i: int in range(_stars.size()):
+		var twinkle: float = absf(sin(Time.get_ticks_msec() * 0.0004 + _stars_phase[i])) * 0.5 + 0.5
+		var alpha: float = 0.15 + twinkle * 0.35
+		node.draw_circle(_stars[i], 0.8 + twinkle * 0.6, Color(1.0, 1.0, 1.0, alpha))
+
+# ============================================================
+# 边界
+# ============================================================
 func _wrap(n: Node2D) -> void:
-	const W := 1280.0
-	const H := 900.0
+	const W := 3200.0
+	const H := 2000.0
 	if n.global_position.x > W / 2.0:
 		n.global_position.x -= W
 	elif n.global_position.x < -W / 2.0:
