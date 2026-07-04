@@ -1,39 +1,41 @@
 extends Node2D
 ## ============================================================
-## Blind Flight Rescue — 盲飞救援
-## 单脚本 Godot 4 游戏 | 纯代码构建所有视觉元素
+## GameScene — 核心游戏关卡
+## 重构自 game.gd，适配多场景架构 + GameManager 全局单例
 ## ============================================================
 
-# ==================== 游戏状态 ====================
-var fuel: float = 100.0
-var fuel_max: float = 100.0
-const FUEL_BURN: float = 12.0             # W 键每秒油耗
-const FUEL_REFILL: float = 55.0            # 救援成功回油量
-var score: int = 0
-var rescue_count: int = 0
-var game_over: bool = false
-var rescuing: bool = false       # 正在播放救援缩放动画
+# ==================== 关卡参数 ====================
+const RESCUES_PER_LEVEL: int = 3             # 每关需要救援次数
+const FUEL_MAX: float = 100.0                 # 最大燃料
+const FUEL_BURN: float = 12.0                # W 键每秒油耗
+const FUEL_REFILL: float = 55.0              # 救援成功回油量
 
 # ==================== 风场 ====================
 var wind_vector: Vector2 = Vector2(50.0, -30.0)  # 初始微风
-const BASE_WIND: float = 60.0              # 基础风力
+const BASE_WIND: float = 60.0                 # 基础风力
 
 # ==================== 飞行参数 ====================
-const THRUST: float = 320.0                # 推进力
-const BRAKE: float = 200.0                 # S 键减速力（不耗油）
-const ROT_ACCEL: float = 20.0              # 旋转加速度
-const ROT_DRAG: float = 0.80               # 旋转惯性衰减
-const LIN_DRAG: float = 0.992              # 线性惯性
-const MAX_SPD: float = 420.0               # 最大速度
+const THRUST: float = 320.0
+const BRAKE: float = 200.0
+const ROT_ACCEL: float = 20.0
+const ROT_DRAG: float = 0.80
+const LIN_DRAG: float = 0.992
+const MAX_SPD: float = 420.0
 
-# ==================== 节点 ====================
+# ==================== 本地游戏状态 ====================
+var _session_score: int = 0                   # 本局得分（同步到 GameManager.high_score）
+var _rescue_count: int = 0                    # 本关已救援次数
+var _game_over: bool = false
+var rescuing: bool = false                    # 正在播放救援缩放动画
+
+# ==================== 节点引用 ====================
 var player: CharacterBody2D
 var body_poly: Polygon2D
 var flame_poly: Polygon2D
 var anchor: Area2D
-var hex_poly: Polygon2D          # 六边形填充（呼吸动效用）
-var hex_border: Line2D           # 六边形边框（呼吸动效用）
-var rescue_ring: Line2D          # 救援范围圈（可视化）
+var hex_poly: Polygon2D
+var hex_border: Line2D
+var rescue_ring: Line2D
 var camera: Camera2D
 var angular_velocity: float = 0.0
 
@@ -42,51 +44,71 @@ const DASH_COUNT := 8
 const DASH_LEN := 10.0
 const DASH_GAP := 14.0
 const DASH_MAX := 180.0
-const DASH_FLOW_SPEED := 90.0   # 流量速率，不随速度变化
+const DASH_FLOW_SPEED := 90.0
 var dash_offset: float = 0.0
 var trail_node: Node2D
-var star_node: Node2D             # 星空绘制节点
+var star_node: Node2D
 
-# UI
+# UI 节点
+var _font: Font
 var compass_needle: Sprite2D
-var compass_ripple: Sprite2D     # 罗盘水纹涟漪
+var compass_ripple: Sprite2D
 var fuel_fill: ColorRect
 var score_label: Label
 var dist_label: Label
 var hint_label: Label
 var game_over_label: Label
-var signal_label: Label           # 就近信号报告
+var signal_label: Label
 
-# ==================== 锚点系统（S键抛锚）====================
-var anchor_node: Node2D = null           # 锚点节点（静态）
+# 锚点系统
+var anchor_node: Node2D = null
 var anchor_active: bool = false
 const ANCHOR_RADIUS: float = 150.0
 const ANCHOR_FUEL_COST: float = 5.0
-var anchor_circle_poly: Polygon2D        # 蓝色半透明圆环
-var anchor_dash_node: Node2D             # 虚线连接飞船与锚点
+var anchor_circle_poly: Polygon2D
+var anchor_dash_node: Node2D
 
-# ==================== 程序化音频 ====================
+# 程序化音频
 var audio_player: AudioStreamPlayer
 var audio_gen: AudioStreamGenerator
 var audio_playback: AudioStreamGeneratorPlayback
-var beep_timer: float = 0.0              # 雷达滴声计时器
-var _beep_samples_left: int = 0          # 当前滴声剩余采样数
-var _beep_freq: float = 0.0              # 当前滴声频率
-var _anchor_sound_left: int = 0          # 抛锚音剩余采样数
+var beep_timer: float = 0.0
+var _beep_samples_left: int = 0
+var _beep_freq: float = 0.0
+var _anchor_sound_left: int = 0
 const AUDIO_SAMPLE_RATE: int = 44100
-const AUDIO_BUFFER_LEN: float = 0.3      # 音频缓冲秒数
+const AUDIO_BUFFER_LEN: float = 0.3
+
+# 星空
+var _stars: PackedVector2Array
+var _stars_phase: Array[float]
 
 
 # ============================================================
-# _ready — 构建一切
+# _ready — 构建一切 + 同步 GameManager 状态
 # ============================================================
 func _ready() -> void:
 	RenderingServer.set_default_clear_color(Color(0.02, 0.04, 0.16, 1.0))
 
-	# 创建星空背景节点
+	# ---- 从 GameManager 同步初始化数据 ----
+	GameManager.set_game_state(GameManager.GameState.PLAYING)
+
+	# 燃料：优先使用 GameManager 缓存值（跨场景传递）
+	if GameManager.fuel <= 0.0:
+		GameManager.fuel = FUEL_MAX
+	else:
+		# 跨场景传来的燃料，钳制到最大值
+		GameManager.fuel = minf(GameManager.fuel, FUEL_MAX)
+
+	# 风力初始化：根据关卡难度递增
+	var level := GameManager.current_level
+	var wind_mult: float = 1.0 + float(level - 1) * 0.5   # Lv1=1.0, Lv2=1.5, Lv3=2.0
+	var na: float = randf_range(0.0, TAU)
+	wind_vector = Vector2.RIGHT.rotated(na) * BASE_WIND * wind_mult
+
+	# 构建场景
 	_build_stars()
 
-	# 创建轨迹绘制节点
 	trail_node = Node2D.new()
 	trail_node.name = "TrailNode"
 	add_child(trail_node)
@@ -98,29 +120,47 @@ func _ready() -> void:
 	_build_ui()
 	_spawn_anchor()
 
-	# ---- 锚点虚线绘制节点（必须在锚点创建之前初始化）----
 	anchor_dash_node = Node2D.new()
 	anchor_dash_node.name = "AnchorDash"
 	add_child(anchor_dash_node)
 	anchor_dash_node.draw.connect(_draw_anchor_dash)
 
-	# ---- 初始化程序化音频 ----
 	_build_audio()
 
+	# 更新 UI 初始值
+	score_label.text = "救援: %d" % _session_score
+	_update_fuel()
+
 
 # ============================================================
-# _input — 检测 S 键按下（抛锚）
+# _input — S 键抛锚 / ESC 暂停
 # ============================================================
 func _input(event: InputEvent) -> void:
-	if game_over:
+	if _game_over:
 		return
-	# 仅响应首次按下，忽略按键重复（echo）事件，防止重复抛锚
+
+	# S 键抛锚
 	if event.is_action_pressed("ui_down") and not event.is_echo():
 		_do_anchor_drop()
 
+	# ESC 暂停
+	if event.is_action_pressed("ui_cancel") and not event.is_echo():
+		_open_pause_menu()
+		get_viewport().set_input_as_handled()
+
 
 # ============================================================
-# 玩家 (CharacterBody2D + 白色三角 Polygon2D)
+# 暂停菜单
+# ============================================================
+func _open_pause_menu() -> void:
+	# 加载 PauseMenu 脚本并实例化
+	var PauseMenuClass := load("res://PauseMenu.gd") as GDScript
+	var pause_menu: Node = PauseMenuClass.new()
+	add_child(pause_menu)
+
+
+# ============================================================
+# 玩家 构建
 # ============================================================
 func _build_player() -> void:
 	player = CharacterBody2D.new()
@@ -158,7 +198,7 @@ func _build_player() -> void:
 
 
 # ============================================================
-# 相机 — 跟位置不跟旋转
+# 相机
 # ============================================================
 func _build_camera() -> void:
 	camera = Camera2D.new()
@@ -168,7 +208,7 @@ func _build_camera() -> void:
 
 
 # ============================================================
-# 信标 (Area2D + 红色六边 Polygon2D + Line2D 框)
+# 信标 (Area2D + 红色六边)
 # ============================================================
 func _build_anchor() -> void:
 	anchor = Area2D.new()
@@ -204,7 +244,6 @@ func _build_anchor() -> void:
 	hex_border.points = bpts
 	anchor.add_child(hex_border)
 
-	# 救援范围可视化圈（半径 48，匹配碰撞体，淡蓝色半透明）
 	rescue_ring = Line2D.new()
 	rescue_ring.name = "RescueRing"
 	rescue_ring.width = 1.2
@@ -225,12 +264,11 @@ func _build_anchor() -> void:
 # UI (CanvasLayer)
 # ============================================================
 func _build_ui() -> void:
+	_font = load("res://YuFanDanQingSong.otf") as Font
+
 	var ui := CanvasLayer.new()
 	ui.name = "UI"
 	add_child(ui)
-
-	# 加载自定义字体（项目根目录下的 YuFanDanQingSong.otf）
-	var custom_font: Font = load("res://YuFanDanQingSong.otf")
 
 	# ---- 罗盘 (右上) ----
 	var cc := Control.new()
@@ -250,7 +288,6 @@ func _build_ui() -> void:
 	compass_needle.texture = _make_needle_tex()
 	cc.add_child(compass_needle)
 
-	# 水纹涟漪环（搜索动效）
 	compass_ripple = Sprite2D.new()
 	compass_ripple.name = "Ripple"
 	compass_ripple.position = Vector2(95, 95)
@@ -276,7 +313,7 @@ func _build_ui() -> void:
 	fl.text = "FUEL"
 	fl.add_theme_font_size_override("font_size", 20)
 	fl.add_theme_color_override("font_color", Color(0.4, 0.8, 0.9, 0.8))
-	fl.add_theme_font_override("font", custom_font)
+	fl.add_theme_font_override("font", _font)
 	ui.add_child(fl)
 
 	# ---- 分数 ----
@@ -285,7 +322,7 @@ func _build_ui() -> void:
 	score_label.text = "救援: 0"
 	score_label.add_theme_font_size_override("font_size", 32)
 	score_label.add_theme_color_override("font_color", Color(1.0, 0.9, 0.3, 0.9))
-	score_label.add_theme_font_override("font", custom_font)
+	score_label.add_theme_font_override("font", _font)
 	ui.add_child(score_label)
 
 	# ---- 距离 (罗盘下方) ----
@@ -295,7 +332,7 @@ func _build_ui() -> void:
 	dist_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	dist_label.add_theme_font_size_override("font_size", 22)
 	dist_label.add_theme_color_override("font_color", Color(0.5, 0.8, 1.0, 0.7))
-	dist_label.add_theme_font_override("font", custom_font)
+	dist_label.add_theme_font_override("font", _font)
 	ui.add_child(dist_label)
 
 	# ---- 就近信号报告 (罗盘下方第二条) ----
@@ -305,7 +342,7 @@ func _build_ui() -> void:
 	signal_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	signal_label.add_theme_font_size_override("font_size", 24)
 	signal_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.5, 0.0))
-	signal_label.add_theme_font_override("font", custom_font)
+	signal_label.add_theme_font_override("font", _font)
 	signal_label.text = "搜索中..."
 	ui.add_child(signal_label)
 
@@ -314,11 +351,11 @@ func _build_ui() -> void:
 	hint_label.anchors_preset = Control.PRESET_CENTER_BOTTOM
 	hint_label.position = Vector2(-280, -36)
 	hint_label.size = Vector2(560, 30)
-	hint_label.text = "A/D 旋转 | W 加速 | S 抛锚/减速 | 指针指上 = 对准目标"
+	hint_label.text = "A/D 旋转 | W 加速 | S 抛锚/减速 | Esc 暂停 | 指针指上 = 对准目标"
 	hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hint_label.add_theme_font_size_override("font_size", 24)
 	hint_label.add_theme_color_override("font_color", Color(0.4, 0.7, 0.9, 0.7))
-	hint_label.add_theme_font_override("font", custom_font)
+	hint_label.add_theme_font_override("font", _font)
 	ui.add_child(hint_label)
 
 	# ---- Game Over ----
@@ -329,7 +366,7 @@ func _build_ui() -> void:
 	game_over_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	game_over_label.add_theme_font_size_override("font_size", 64)
 	game_over_label.add_theme_color_override("font_color", Color(1.0, 0.2, 0.2, 1.0))
-	game_over_label.add_theme_font_override("font", custom_font)
+	game_over_label.add_theme_font_override("font", _font)
 	game_over_label.set_anchors_preset(Control.PRESET_CENTER)
 	ui.add_child(game_over_label)
 
@@ -377,16 +414,13 @@ func _make_needle_tex() -> ImageTexture:
 
 
 func _make_ripple_tex() -> ImageTexture:
-	## 水纹涟漪纹理：透明圆形环，用于搜索雷达扫描
 	const S := 180
 	var img := Image.create(S, S, false, Image.FORMAT_RGBA8)
 	img.fill(Color(0, 0, 0, 0))
 	var c := Vector2(S / 2.0, S / 2.0)
-	# 绘制波纹状半透明圆环
 	for y: int in range(S):
 		for x: int in range(S):
 			var d: float = Vector2(x, y).distance_to(c)
-			# 外圈粗线
 			if d >= 84.0 and d <= 88.0:
 				img.set_pixel(x, y, Color(0.2, 0.7, 1.0, 0.4))
 	return ImageTexture.create_from_image(img)
@@ -412,7 +446,6 @@ func _spawn_anchor() -> void:
 	var a: float = randf_range(0.0, TAU)
 	var d: float = randf_range(300.0, 550.0)
 	anchor.global_position = player.global_position + Vector2.RIGHT.rotated(a) * d
-	# 确保信标不会生成在飞行范围外（与玩家使用同样的边界包装）
 	_wrap(anchor)
 
 	hex_poly.scale = Vector2.ONE
@@ -424,67 +457,94 @@ func _spawn_anchor() -> void:
 # 救援成功
 # ============================================================
 func _on_rescue(_b: Node2D) -> void:
-	if game_over or rescuing:
+	if _game_over or rescuing:
 		return
 	rescuing = true
-	rescue_count += 1
-	score += int(100 + rescue_count * 15)
-	fuel = minf(fuel_max, fuel + FUEL_REFILL)
-	score_label.text = "救援: %d" % score
+	_rescue_count += 1
+	_session_score += int(100 + _rescue_count * 15)
+
+	# 同步到 GameManager
+	GameManager.fuel = minf(FUEL_MAX, GameManager.fuel + FUEL_REFILL)
+	if _session_score > GameManager.high_score:
+		GameManager.high_score = _session_score
+
+	score_label.text = "救援: %d" % _session_score
 
 	var na: float = randf_range(0.0, TAU)
-	var ns: float = BASE_WIND + float(rescue_count) * 25.0
+	var wind_mult: float = 1.0 + float(GameManager.current_level - 1) * 0.5
+	var ns: float = BASE_WIND * wind_mult + float(_rescue_count) * 25.0
 	wind_vector = Vector2.RIGHT.rotated(na) * ns
 
-	# 缩放消失动画：六边形+边框+救援圈 同时向中心缩至零
+	# 缩放消失动画
 	var tw := create_tween()
 	tw.set_parallel(true)
 	tw.tween_property(hex_poly, "scale", Vector2.ZERO, 0.35).set_ease(Tween.EASE_IN)
 	tw.tween_property(hex_border, "scale", Vector2.ZERO, 0.35).set_ease(Tween.EASE_IN)
 	tw.tween_property(rescue_ring, "scale", Vector2.ZERO, 0.35).set_ease(Tween.EASE_IN)
 
-	# 分数闪烁
 	var tw2 := create_tween()
 	tw2.tween_property(score_label, "modulate", Color.WHITE, 0.08)
 	tw2.tween_property(score_label, "modulate", Color(1.0, 0.9, 0.3, 0.9), 0.25)
 
-	# 动画完成后生成新信标
 	tw.finished.connect(_on_rescue_done)
 
 
 # ============================================================
-# Game Over / Restart
+# 救援动画完成 → 判断是否通关
 # ============================================================
-func _game_over() -> void:
-	game_over = true
+func _on_rescue_done() -> void:
+	## 缩放动画结束后重新生成信标并恢复状态
+	if _rescue_count >= RESCUES_PER_LEVEL:
+		_level_complete()
+	else:
+		_spawn_anchor()
+		rescuing = false
+
+
+# ============================================================
+# 关卡通关
+# ============================================================
+func _level_complete() -> void:
+	## 关卡通关：标记解锁，同步最高分，返回关卡选择
+	GameManager.high_score = maxi(GameManager.high_score, _session_score)
+	GameManager.complete_level(GameManager.current_level)
+
+	# 短暂延迟后跳转到关卡选择页
+	await get_tree().create_timer(0.8).timeout
+	GameManager.change_scene("LevelSelect")
+
+
+# ============================================================
+# Game Over
+# ============================================================
+func _on_game_over_fuel() -> void:
+	_game_over = true
+	game_over_label.text = "燃料耗尽...\n按 R 重新开始\n按 M 返回主菜单"
 	game_over_label.visible = true
-	hint_label.text = "按 R 重新开始"
+	hint_label.text = "按 R 重新开始  |  M 返回主菜单"
 	flame_poly.visible = false
 
 
+# ============================================================
+# 重新开始
+# ============================================================
 func _restart() -> void:
-	game_over = false
-	fuel = fuel_max
-	score = 0
-	rescue_count = 0
-	wind_vector = Vector2(50.0, -30.0)
-	player.position = Vector2.ZERO
-	player.velocity = Vector2.ZERO
-	angular_velocity = 0.0
-	player.rotation = 0.0
-	score_label.text = "救援: 0"
-	game_over_label.visible = false
-	hint_label.text = "A/D 旋转 | W 加速 | S 抛锚/减速 | 指针指上 = 对准目标"
-	fuel_fill.color = Color(0.2, 0.85, 0.5, 0.9)
-	_remove_anchor()
-	_spawn_anchor()
+	# 重置全局燃料
+	GameManager.fuel = FUEL_MAX
+	# 直接重新加载当前场景即可
+	get_tree().reload_current_scene()
+
+
+func _go_to_main_menu() -> void:
+	GameManager.fuel = FUEL_MAX
+	GameManager.change_scene("MainMenu")
 
 
 # ============================================================
-# 主循环
+# 主循环 (_physics_process)
 # ============================================================
 func _physics_process(delta: float) -> void:
-	if game_over:
+	if _game_over:
 		_update_compass()
 		return
 
@@ -493,12 +553,13 @@ func _physics_process(delta: float) -> void:
 	angular_velocity *= ROT_DRAG
 	player.rotation += angular_velocity * delta
 
-	var thrusting: bool = Input.is_action_pressed("ui_up") and fuel > 0.0
+	var thrusting: bool = Input.is_action_pressed("ui_up") and GameManager.fuel > 0.0
 	if thrusting:
 		player.velocity += Vector2.RIGHT.rotated(player.rotation) * THRUST * delta
-		fuel = maxf(0.0, fuel - FUEL_BURN * delta)
-		if fuel <= 0.0:
-			_game_over()
+		GameManager.fuel = maxf(0.0, GameManager.fuel - FUEL_BURN * delta)
+		if GameManager.fuel <= 0.0:
+			GameManager.fuel = 0.0
+			_on_game_over_fuel()
 
 	if Input.is_action_pressed("ui_down"):
 		var spd: float = player.velocity.length()
@@ -506,7 +567,6 @@ func _physics_process(delta: float) -> void:
 			var force: float = minf(BRAKE * delta, spd)
 			player.velocity -= player.velocity.normalized() * force
 
-	# 锚点范围内：抵消风力；否则：应用风力
 	if not _is_in_anchor_range():
 		player.velocity += wind_vector * delta
 	player.velocity *= LIN_DRAG
@@ -525,14 +585,12 @@ func _physics_process(delta: float) -> void:
 
 	camera.global_position = player.global_position
 
-	# 速度虚线流动偏移
 	dash_offset += DASH_FLOW_SPEED * delta
 	if dash_offset > DASH_GAP + DASH_LEN:
 		dash_offset -= DASH_GAP + DASH_LEN
 
 	trail_node.queue_redraw()
 
-	# 锚点虚线重绘
 	if anchor_active:
 		anchor_dash_node.queue_redraw()
 
@@ -540,26 +598,28 @@ func _physics_process(delta: float) -> void:
 	_update_fuel()
 
 
+# ============================================================
+# _process — 重试检测 + 音频
+# ============================================================
 func _process(_delta: float) -> void:
-	if Input.is_key_pressed(KEY_R) and game_over:
-		_restart()
+	if _game_over:
+		if Input.is_key_pressed(KEY_R):
+			_restart()
+		elif Input.is_key_pressed(KEY_M):
+			_go_to_main_menu()
 
-	# ---- 雷达探测音：距离越近，滴声越急、音调越高 ----
-	if not game_over and anchor != null:
+	# 雷达探测音
+	if not _game_over and anchor != null:
 		var dist: float = player.global_position.distance_to(anchor.global_position)
 		beep_timer -= _delta
 		if beep_timer <= 0.0:
-			# 距离 → 频率映射（近=高音 1500Hz，远=低音 200Hz）
 			var t: float = clamp(dist / 500.0, 0.0, 1.0)
 			var freq: float = lerpf(200.0, 1600.0, 1.0 - t)
-			# 距离 → 间隔映射（近=急 0.12s，远=缓 2.5s）
 			var interval: float = lerpf(2.5, 0.12, 1.0 - t)
-			# 触发一次滴声：80ms 时长的正弦波
 			_beep_freq = freq
 			_beep_samples_left = int(AUDIO_SAMPLE_RATE * 0.08)
 			beep_timer = interval
 
-	# ---- 持续填充音频缓冲区 ----
 	_fill_audio_buffer()
 
 
@@ -584,13 +644,11 @@ func _update_compass() -> void:
 	var blink: float = sin(Time.get_ticks_msec() * 0.003 * lerpf(0.8, 6.0, 1.0 - t)) * 0.25 + 0.75
 	compass_needle.modulate.a *= blink
 
-	# 水纹涟漪：距离越近 → 涟漪越大、透明度越低
 	compass_ripple.visible = true
-	var ripple_scale: float = lerpf(0.3, 1.1, 1.0 - t)  # 远=小圈, 近=大圈扩展
-	var ripple_alpha: float = lerpf(0.05, 0.5, 1.0 - t)  # 远=极淡, 近=清晰
+	var ripple_scale: float = lerpf(0.3, 1.1, 1.0 - t)
+	var ripple_alpha: float = lerpf(0.05, 0.5, 1.0 - t)
 	compass_ripple.scale = Vector2(ripple_scale, ripple_scale)
 	compass_ripple.modulate.a = ripple_alpha
-	# 缓慢旋转涟漪
 	compass_ripple.rotation += 0.008
 
 	_update_signal_report(dist)
@@ -600,7 +658,7 @@ func _update_compass() -> void:
 # 油量条
 # ============================================================
 func _update_fuel() -> void:
-	var r: float = fuel / fuel_max
+	var r: float = GameManager.fuel / FUEL_MAX
 	fuel_fill.size.x = 232.0 * r
 	if r > 0.4:
 		fuel_fill.color = Color(0.2, 0.85, 0.5, 0.9)
@@ -635,24 +693,19 @@ func _update_signal_report(dist: float) -> void:
 
 
 # ============================================================
-# 速度矢量虚线 — 从飞机尾部沿实际运动方向绘制流动虚线
-# 帮助玩家可视化"风偏后我实际在往哪飞"
+# 速度矢量虚线
 # ============================================================
 func _draw_trail() -> void:
-	if game_over or player.velocity.length() < 5.0:
+	if _game_over or player.velocity.length() < 5.0:
 		return
 
-	# 速度方向（世界坐标）— 飞机实际的运动方向
 	var vel_dir: Vector2 = player.velocity.normalized()
 	var vel_len: float = player.velocity.length()
-	# 轨迹长度与速度成正比（快=远，慢=近）
 	var trail_len: float = clamp(vel_len * 0.45, 30.0, DASH_MAX)
 
-	# 颜色：青色荧光，速度越快越亮
 	var alpha: float = clamp(vel_len / 180.0, 0.1, 0.55)
 	var dash_color := Color(0.1, 0.95, 1.0, alpha)
 
-	# 从飞机前方开始，沿速度方向画出流动虚线
 	var start_pos: Vector2 = player.global_position + vel_dir * 6.0
 	var offset: float = dash_offset
 
@@ -663,24 +716,17 @@ func _draw_trail() -> void:
 		if drawing:
 			var from: Vector2 = start_pos + vel_dir * pos
 			var to: Vector2 = start_pos + vel_dir * seg_end
-			# offset 实现虚线向飞机方向流动
 			from -= vel_dir * offset
 			to -= vel_dir * offset
-			# 越远处越淡，营造渐隐效果
 			var fade: float = 1.0 - (pos / trail_len)
 			var col := Color(dash_color, dash_color.a * fade)
 			trail_node.draw_line(from, to, col, 1.3)
 		pos = seg_end
 		drawing = not drawing
 
-# ============================================================
-func _on_rescue_done() -> void:
-	## 缩放动画结束后重新生成信标并恢复状态
-	_spawn_anchor()
-	rescuing = false
 
 # ============================================================
-# 六边形呼吸动效 + 救援圈同步（救援动画期间跳过）
+# 六边形呼吸动效
 # ============================================================
 func _animate_hexagon() -> void:
 	if rescuing:
@@ -709,21 +755,14 @@ func _anim_flame() -> void:
 
 
 # ============================================================
-# 边界
+# 星空背景
 # ============================================================
-# ============================================================
-# 星空背景 — 随机散布半透明星点 + 微闪烁
-# ============================================================
-var _stars: PackedVector2Array
-var _stars_phase: Array[float]
-
 func _build_stars() -> void:
 	star_node = Node2D.new()
 	star_node.name = "Stars"
 	star_node.z_index = -10
 	add_child(star_node)
 
-	# 随机生成 80 颗星星
 	_stars.clear()
 	_stars_phase.clear()
 	for i: int in range(80):
@@ -735,44 +774,36 @@ func _build_stars() -> void:
 
 	star_node.draw.connect(_draw_stars.bind(star_node))
 
+
 func _draw_stars(node: Node2D) -> void:
 	for i: int in range(_stars.size()):
 		var twinkle: float = absf(sin(Time.get_ticks_msec() * 0.0004 + _stars_phase[i])) * 0.5 + 0.5
 		var alpha: float = 0.15 + twinkle * 0.35
 		node.draw_circle(_stars[i], 0.8 + twinkle * 0.6, Color(1.0, 1.0, 1.0, alpha))
 
+
 # ============================================================
-# 边界
-# ============================================================
-# ============================================================
-# 锚点系统 — S 键抛锚：创建/销毁/检测/绘制
+# 锚点系统
 # ============================================================
 func _do_anchor_drop() -> void:
-	# 燃料不足
-	if fuel < ANCHOR_FUEL_COST:
+	if GameManager.fuel < ANCHOR_FUEL_COST:
 		return
 
-	# 移除旧锚点（同一时间只允许一个）
 	_remove_anchor()
 
-	# 消耗燃料
-	fuel = maxf(0.0, fuel - ANCHOR_FUEL_COST)
+	GameManager.fuel = maxf(0.0, GameManager.fuel - ANCHOR_FUEL_COST)
 
-	# 创建锚点节点（静态 Node2D，固定在世界坐标）
 	_spawn_anchor_node(player.global_position)
 
-	# 播放抛锚音效（低频咚声）
 	_trigger_anchor_sound()
 
 
 func _spawn_anchor_node(pos: Vector2) -> void:
-	## 在指定世界坐标创建锚点节点及所有视觉元素
 	anchor_node = Node2D.new()
 	anchor_node.name = "AnchorPoint"
 	anchor_node.global_position = pos
 	add_child(anchor_node)
 
-	# 蓝色半透明圆环填充（Polygon2D 近似圆形）
 	anchor_circle_poly = Polygon2D.new()
 	anchor_circle_poly.name = "AnchorCircle"
 	const SEG := 64
@@ -784,7 +815,6 @@ func _spawn_anchor_node(pos: Vector2) -> void:
 	anchor_circle_poly.color = Color(0.2, 0.5, 1.0, 0.18)
 	anchor_node.add_child(anchor_circle_poly)
 
-	# 边框线（更亮的蓝色圆环轮廓）
 	var ring := Line2D.new()
 	ring.name = "AnchorRing"
 	ring.width = 1.5
@@ -810,19 +840,16 @@ func _remove_anchor() -> void:
 
 
 func _is_in_anchor_range() -> bool:
-	## 检测飞船是否在锚点范围内，超出则自动销毁锚点
 	if not anchor_active or anchor_node == null:
 		return false
 	var dist: float = player.global_position.distance_to(anchor_node.global_position)
 	if dist > ANCHOR_RADIUS:
-		# 离开范围 → 自动销毁锚点，风力恢复影响
 		_remove_anchor()
 		return false
 	return true
 
 
 func _draw_anchor_dash() -> void:
-	## 绘制飞船到锚点之间的虚线连接
 	if not anchor_active or anchor_node == null:
 		return
 
@@ -849,7 +876,7 @@ func _draw_anchor_dash() -> void:
 
 
 # ============================================================
-# 程序化音频 — AudioStreamGenerator 正弦波生成
+# 程序化音频
 # ============================================================
 func _build_audio() -> void:
 	audio_player = AudioStreamPlayer.new()
@@ -860,14 +887,12 @@ func _build_audio() -> void:
 	audio_gen.mix_rate = AUDIO_SAMPLE_RATE
 	audio_gen.buffer_length = AUDIO_BUFFER_LEN
 	audio_player.stream = audio_gen
-	audio_player.play()  # 持续播放，_process 中每帧填充数据
+	audio_player.play()
 
 	audio_playback = audio_player.get_stream_playback()
 
 
 func _fill_audio_buffer() -> void:
-	## 每帧调用：向 AudioStreamGenerator 缓冲区填入正弦波采样数据
-	## 采样值 = sin(2π · f · t)，其中 t = 已播放采样数 / 采样率
 	if audio_playback == null:
 		return
 
@@ -878,12 +903,11 @@ func _fill_audio_buffer() -> void:
 	for _i: int in range(to_fill):
 		var val: float = 0.0
 
-		# —— 雷达滴声 ——
+		# 雷达滴声
 		if _beep_samples_left > 0:
-			var total: int = int(AUDIO_SAMPLE_RATE * 0.08)  # 80ms 总时长
+			var total: int = int(AUDIO_SAMPLE_RATE * 0.08)
 			var elapsed: int = total - _beep_samples_left
 			var t: float = float(elapsed) / float(AUDIO_SAMPLE_RATE)
-			# 短促包络：最后 15ms 线性衰减，消除滴声尾部的咔嗒声
 			var env: float = 1.0
 			var fade_smp: int = int(AUDIO_SAMPLE_RATE * 0.015)
 			if _beep_samples_left < fade_smp:
@@ -891,28 +915,25 @@ func _fill_audio_buffer() -> void:
 			val += sin(t * TAU * _beep_freq) * env * 0.3
 			_beep_samples_left -= 1
 
-		# —— 抛锚音效（低频咚声）——
+		# 抛锚音效
 		if _anchor_sound_left > 0:
-			var total: int = int(AUDIO_SAMPLE_RATE * 0.1)  # 100ms
+			var total: int = int(AUDIO_SAMPLE_RATE * 0.1)
 			var elapsed: int = total - _anchor_sound_left
 			var t: float = float(elapsed) / float(AUDIO_SAMPLE_RATE)
-			# 200Hz 正弦波 + 指数衰减包络 e^(-18t)，模拟沉闷的"咚"
 			var env: float = exp(-t * 18.0)
 			val += sin(t * TAU * 200.0) * env * 0.5
 			_anchor_sound_left -= 1
 
-		# 钳制防止削波失真
 		val = clampf(val, -1.0, 1.0)
 		audio_playback.push_frame(Vector2(val, val))
 
 
 func _trigger_anchor_sound() -> void:
-	## 触发抛锚音效：设置 100ms 的 200Hz 低频正弦波采样数
 	_anchor_sound_left = int(AUDIO_SAMPLE_RATE * 0.1)
 
 
 # ============================================================
-# 边界
+# 边界包装
 # ============================================================
 func _wrap(n: Node2D) -> void:
 	const W := 3200.0
