@@ -161,10 +161,12 @@ func _on_resume() -> void:
 
 
 func _on_retry() -> void:
+	var was_endless := (GameManager._pre_pause_state == GameManager.GameState.ENDLESS)
 	GameManager.resume_game()
-	# 重置燃料后通过 GameManager 重建场景（纯脚本无 .tscn 文件，不能用 reload_current_scene）
+	# 根据暂停前的状态重建对应场景
+	var scene := "EndlessMode" if was_endless else "GameScene"
 	GameManager.fuel = 100.0
-	GameManager.change_scene("GameScene")
+	GameManager.change_scene(scene)
 	queue_free()
 
 

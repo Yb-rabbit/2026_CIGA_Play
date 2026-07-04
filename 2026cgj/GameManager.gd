@@ -42,6 +42,7 @@ var high_score: int = 0                            # 最高分
 var game_state: GameState = GameState.MENU         # 当前游戏状态
 var fuel: float = 170.0                             # 全局燃料缓存，用于跨场景传递
 var endless_unlocked: bool = false                  # 是否已解锁无尽模式（三关全部通关后）
+var _pre_pause_state: GameState = GameState.PLAYING # 暂停前的游戏状态（用于恢复）
 
 # ==================== 信号 ====================
 signal scene_changed(scene_name: String)
@@ -159,6 +160,7 @@ func pause_game() -> void:
 	## 暂停游戏：设置全局暂停并更新游戏状态
 	if game_state != GameState.PLAYING and game_state != GameState.ENDLESS:
 		return
+	_pre_pause_state = game_state
 	get_tree().paused = true
 	game_state = GameState.PAUSED
 	state_changed.emit(game_state)
@@ -167,15 +169,14 @@ func pause_game() -> void:
 
 
 func resume_game() -> void:
-	## 恢复游戏：取消全局暂停并恢复游戏状态
+	## 恢复游戏：取消全局暂停并恢复暂停前的游戏状态
 	if game_state != GameState.PAUSED:
 		return
 	get_tree().paused = false
-	# 恢复时保持 PLAYING 状态（关卡和 EndlessMode 都视为 PLAYING）
-	game_state = GameState.PLAYING
+	game_state = _pre_pause_state
 	state_changed.emit(game_state)
 	game_resumed.emit()
-	print("[GameManager] 游戏已恢复")
+	print("[GameManager] 游戏已恢复 → %s" % GameState.keys()[game_state])
 
 
 # ============================================================

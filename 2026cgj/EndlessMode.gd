@@ -256,6 +256,9 @@ func _play_next_credit() -> void:
 	## 通过 RadioAdvisor 播放下一条制作人员消息
 	if _credit_index >= _credit_messages.size():
 		_credits_finished = true
+		# 名单播放完毕，恢复机载通讯的正常闲置消息
+		if _radio != null:
+			_radio.set_process(true)
 		return
 
 	var entry: Dictionary = _credit_messages[_credit_index]
