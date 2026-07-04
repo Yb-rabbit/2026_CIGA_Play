@@ -48,18 +48,26 @@ func _ready() -> void:
 	# ---- 关卡列表容器 (GridContainer) ----
 	var grid := GridContainer.new()
 	grid.name = "LevelGrid"
-	grid.columns = 3
-	grid.add_theme_constant_override("h_separation", 24)
-	grid.add_theme_constant_override("v_separation", 24)
+	grid.columns = 5  # 5 列：关卡 1/2/3 + 无尽模式 + WIN 表彰
+	grid.add_theme_constant_override("h_separation", 20)
+	grid.add_theme_constant_override("v_separation", 20)
 
 	# 生成 3 个关卡按钮
 	for level_id: int in range(1, 4):
 		var card := _make_level_card(level_id)
 		grid.add_child(card)
 
+	# 无尽模式卡片（始终显示，未解锁时灰色锁定）
+	var endless_card := _make_endless_card()
+	grid.add_child(endless_card)
+
+	# WIN 表彰卡片（三关通关后解锁，播放 flute 曲目 + 表彰文本）
+	var win_card := _make_win_card()
+	grid.add_child(win_card)
+
 	# 居中放置 grid
 	grid.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
-	grid.position = Vector2(-240, -100)
+	grid.position = Vector2(-410, -100)
 	add_child(grid)
 
 	# ---- 返回按钮 ----
@@ -68,6 +76,20 @@ func _ready() -> void:
 	back_btn.position = Vector2(-100, -184)
 	back_btn.size = Vector2(200, 48)
 	add_child(back_btn)
+
+
+# ============================================================
+# _input — F12 开发者工具
+# ============================================================
+func _input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and event.keycode == KEY_F12:
+		_open_dev_tools()
+
+
+func _open_dev_tools() -> void:
+	var DevToolsClass := load("res://DevTools.gd") as GDScript
+	var dev_tools: Node = DevToolsClass.new()
+	add_child(dev_tools)
 
 
 # ============================================================
@@ -139,6 +161,141 @@ func _make_level_card(level_id: int) -> Control:
 
 
 # ============================================================
+# 无尽模式卡片工厂
+# ============================================================
+func _make_endless_card() -> Control:
+	var card := Control.new()
+	card.name = "EndlessCard"
+	card.custom_minimum_size = Vector2(160, 200)
+	card.size = Vector2(160, 200)
+
+	# 用 Button 作为点击层
+	var btn := Button.new()
+	btn.name = "CardBtn"
+	btn.size = Vector2(160, 200)
+	btn.flat = true
+	card.add_child(btn)
+
+	# 卡片背景
+	var bg := ColorRect.new()
+	bg.name = "CardBG"
+	bg.size = Vector2(160, 200)
+	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card.add_child(bg)
+
+	# ∞ 符号标签
+	var label := Label.new()
+	label.name = "EndlessLabel"
+	label.text = "∞"
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.add_theme_font_size_override("font_size", 72)
+	label.add_theme_font_override("font", _font)
+	label.size = Vector2(160, 130)
+	label.position = Vector2(0, 0)
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card.add_child(label)
+
+	# 描述标签
+	var desc := Label.new()
+	desc.name = "EndlessDesc"
+	desc.text = "无尽深空"
+	desc.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	desc.add_theme_font_size_override("font_size", 26)
+	desc.add_theme_font_override("font", _font)
+	desc.size = Vector2(160, 32)
+	desc.position = Vector2(0, 135)
+	desc.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card.add_child(desc)
+
+	var unlocked := GameManager.endless_unlocked
+
+	if unlocked:
+		# 已解锁 → 金色
+		bg.color = Color(0.18, 0.14, 0.02, 0.95)
+		label.add_theme_color_override("font_color", Color(1.0, 0.75, 0.1, 1.0))
+		desc.add_theme_color_override("font_color", Color(1.0, 0.7, 0.15, 0.9))
+		btn.pressed.connect(_on_endless_selected)
+		btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	else:
+		# 未解锁 → 灰色背景但 ∞ 和文字依然可见（提示玩家这里有东西）
+		bg.color = Color(0.08, 0.08, 0.12, 0.9)
+		label.add_theme_color_override("font_color", Color(0.3, 0.3, 0.35, 0.6))
+		desc.add_theme_color_override("font_color", Color(0.3, 0.3, 0.35, 0.5))
+		btn.disabled = true
+		btn.mouse_default_cursor_shape = Control.CURSOR_ARROW
+
+	return card
+
+
+# ============================================================
+# WIN 表彰卡片工厂
+# ============================================================
+func _make_win_card() -> Control:
+	var card := Control.new()
+	card.name = "WinCard"
+	card.custom_minimum_size = Vector2(160, 200)
+	card.size = Vector2(160, 200)
+
+	var btn := Button.new()
+	btn.name = "CardBtn"
+	btn.size = Vector2(160, 200)
+	btn.flat = true
+	card.add_child(btn)
+
+	var bg := ColorRect.new()
+	bg.name = "CardBG"
+	bg.size = Vector2(160, 200)
+	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card.add_child(bg)
+
+	# "WIN" 标签
+	var label := Label.new()
+	label.name = "WinLabel"
+	label.text = "WIN"
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.add_theme_font_size_override("font_size", 48)
+	label.add_theme_font_override("font", _font)
+	label.size = Vector2(160, 130)
+	label.position = Vector2(0, 0)
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card.add_child(label)
+
+	# 描述标签
+	var desc := Label.new()
+	desc.name = "WinDesc"
+	desc.text = "通关表彰"
+	desc.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	desc.add_theme_font_size_override("font_size", 22)
+	desc.add_theme_font_override("font", _font)
+	desc.size = Vector2(160, 32)
+	desc.position = Vector2(0, 135)
+	desc.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card.add_child(desc)
+
+	# WIN 卡片解锁条件：全部三关通关后可用（与无尽模式同步）
+	var unlocked := GameManager.endless_unlocked
+
+	if unlocked:
+		# 已解锁 → 金色渐变
+		bg.color = Color(0.16, 0.13, 0.02, 0.95)
+		label.add_theme_color_override("font_color", Color(1.0, 0.75, 0.1, 1.0))
+		desc.add_theme_color_override("font_color", Color(1.0, 0.7, 0.15, 0.9))
+		btn.pressed.connect(_on_win_selected)
+		btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	else:
+		# 未解锁 → 灰色但仍可见轮廓（提示玩家还有内容）
+		bg.color = Color(0.08, 0.08, 0.12, 0.9)
+		label.add_theme_color_override("font_color", Color(0.3, 0.3, 0.35, 0.5))
+		desc.add_theme_color_override("font_color", Color(0.3, 0.3, 0.35, 0.4))
+		btn.disabled = true
+		btn.mouse_default_cursor_shape = Control.CURSOR_ARROW
+
+	return card
+
+
+# ============================================================
 # 小型按钮工厂
 # ============================================================
 func _make_small_button(text: String, callback: Callable) -> Button:
@@ -176,6 +333,17 @@ func _make_small_button(text: String, callback: Callable) -> Button:
 func _on_level_selected(level_id: int) -> void:
 	GameManager.current_level = level_id
 	GameManager.change_scene("StoryIntro")
+
+
+func _on_endless_selected() -> void:
+	# 无尽模式：先显示前置故事（flute 曲目），之后直接进入无尽深空
+	GameManager.current_level = 99
+	GameManager.change_scene("PreEndlessStory")
+
+
+func _on_win_selected() -> void:
+	# WIN 表彰：播放 flute 曲目 + 通关庆祝故事，结束后返回选关页面
+	GameManager.change_scene("WinStory")
 
 
 func _on_back() -> void:

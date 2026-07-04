@@ -29,16 +29,19 @@ enum GameState {
 	MENU,
 	PLAYING,
 	PAUSED,
-	STORY
+	STORY,
+	ENDLESS
 }
 
 # ==================== 全局数据存储 ====================
 const MAX_LEVELS: int = 3                          # 总关卡数
 var current_level: int = 1                         # 当前关卡
 var unlocked_levels: Array = [1]                   # 已解锁关卡列表，默认只有第1关
+var completed_levels: Array[int] = []              # 已通关的关卡列表（用于判定无尽模式）
 var high_score: int = 0                            # 最高分
 var game_state: GameState = GameState.MENU         # 当前游戏状态
-var fuel: float = 100.0                             # 全局燃料缓存，用于跨场景传递
+var fuel: float = 170.0                             # 全局燃料缓存，用于跨场景传递
+var endless_unlocked: bool = false                  # 是否已解锁无尽模式（三关全部通关后）
 
 # ==================== 信号 ====================
 signal scene_changed(scene_name: String)
@@ -154,7 +157,7 @@ func _do_change_scene(scene_name: String) -> void:
 # ============================================================
 func pause_game() -> void:
 	## 暂停游戏：设置全局暂停并更新游戏状态
-	if game_state != GameState.PLAYING:
+	if game_state != GameState.PLAYING and game_state != GameState.ENDLESS:
 		return
 	get_tree().paused = true
 	game_state = GameState.PAUSED
@@ -168,6 +171,7 @@ func resume_game() -> void:
 	if game_state != GameState.PAUSED:
 		return
 	get_tree().paused = false
+	# 恢复时保持 PLAYING 状态（关卡和 EndlessMode 都视为 PLAYING）
 	game_state = GameState.PLAYING
 	state_changed.emit(game_state)
 	game_resumed.emit()
@@ -178,13 +182,14 @@ func resume_game() -> void:
 # 关卡完成 / 解锁
 # ============================================================
 func complete_level(level_id: int) -> void:
-	## 标记关卡解锁
-	## - 如果 level_id 尚未在 unlocked_levels 中，则追加并排序
-	## - 自动解锁下一关（level_id + 1）
-	if level_id not in unlocked_levels:
-		unlocked_levels.append(level_id)
-		unlocked_levels.sort()
-		print("[GameManager] 关卡 %d 已解锁" % level_id)
+	## 标记关卡完成并解锁下一关
+	## - 将该关卡加入 completed_levels（用于判定无尽模式）
+	## - 自动解锁下一关（level_id + 1）供玩家选择
+
+	# 记录通关进度
+	if level_id not in completed_levels:
+		completed_levels.append(level_id)
+		print("[GameManager] 关卡 %d 已完成" % level_id)
 
 	# 自动解锁下一关（上限保护）
 	var next_level: int = level_id + 1
@@ -221,3 +226,24 @@ func is_level_unlocked(level_id: int) -> bool:
 func get_next_unlocked_level() -> int:
 	## 返回已解锁关卡数量（即最后一关 + 1 是否可玩）
 	return unlocked_levels.size()
+
+
+# ============================================================
+# 全部通关检测
+# ============================================================
+func check_all_levels_completed() -> bool:
+	## 检测是否所有关卡都已通关
+	## 如果 1,2,3 全部在 completed_levels 中，则解锁无尽模式
+	## 返回 true 表示三关全部通关（endless_unlocked 已为 true）
+	if endless_unlocked:
+		return true
+	var all_done := true
+	for i: int in range(1, MAX_LEVELS + 1):
+		if i not in completed_levels:
+			all_done = false
+			break
+	if all_done:
+		endless_unlocked = true
+		print("[GameManager] 全部关卡通关！无尽模式已解锁")
+		return true
+	return false
