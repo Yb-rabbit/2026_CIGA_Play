@@ -109,12 +109,17 @@ var _in_search_zone: bool = false                   # 飞船当前是否在搜�
 var _current_search_zone: Dictionary = {}           # 当前所在的搜索圈
 var _beacon_revealed: bool = false                   # 信标是否已被锁定并显示
 var _scan_timer: float = 0.0                         # 扫描计时器（按住 W 累计）
-const SCAN_DURATION: float = 0.6                     # 扫描需要按住 W 的秒数
+var _scan_duration: float = 0.6                      # 扫描需要按住 W 的秒数（随关卡变化）
+var _sos_blink_dist: float = 250.0                   # SOS 闪烁触发距离（随关卡变化）
+var _anchor_spawn_min: float = 300.0                 # 信标生成最小距离
+var _anchor_spawn_max: float = 550.0                 # 信标生成最大距离
 var _is_scanning: bool = false                       # 是否正在进行扫描
 var _compass_locked: bool = false                    # 罗盘是否已锁定目标
 var _last_scan_pct: int = -1                         # 上次显示的扫描百分比（防重复刷新）
 var _last_w_held: bool = false                       # 上次 W 键状态
 var _search_zones_draw_node: Node2D                  # 搜索圈绘制节点
+var _wind_flip_timer: float = -1.0                   # 风场翻转计时器（-1 表示不翻转）
+var _decoy_orbits: Array[Dictionary] = []            # 动态假信标轨道数据
 
 # ==================== 推进音效 ====================
 var _thrust_stream: AudioStreamPlayer
@@ -224,6 +229,27 @@ func _ready() -> void:
 
 	# ---- 背景音乐 ----
 	_build_bgm()
+
+	# ---- 关卡特化参数 ----
+	match level:
+		1:
+			_scan_duration = 0.6
+			_sos_blink_dist = 250.0
+			_anchor_spawn_min = 300.0
+			_anchor_spawn_max = 450.0
+			_wind_flip_timer = -1.0
+		2:
+			_scan_duration = 0.8
+			_sos_blink_dist = 180.0
+			_anchor_spawn_min = 400.0
+			_anchor_spawn_max = 650.0
+			_wind_flip_timer = -1.0
+		_:
+			_scan_duration = 1.0
+			_sos_blink_dist = 120.0
+			_anchor_spawn_min = 500.0
+			_anchor_spawn_max = 750.0
+			_wind_flip_timer = 20.0
 
 	if level == 1:
 		_spawn_tutorial_hint()
@@ -564,6 +590,8 @@ func _on_decoy_collision(body: Node2D) -> void:
 	player.velocity += away * DECOY_KNOCKBACK
 	decoy_collided.emit()
 
+	_update_fuel()
+
 	# 弹开变形动画：玩家飞船被挤压 + 恢复
 	var player_tw := create_tween()
 	player_tw.tween_property(body_poly, "scale", Vector2(0.7, 1.3), 0.08)
@@ -587,8 +615,6 @@ func _on_decoy_collision(body: Node2D) -> void:
 				ltw.tween_property(child, "width", 4.0, 0.05)
 				ltw.tween_property(child, "width", 2.0, 0.15)
 
-	_show_hint_text("赝品信标！燃料 -%d" % int(DECOY_FUEL_DRAIN))
-	_update_fuel()
 
 
 # ============================================================
@@ -837,7 +863,7 @@ func _draw_line_on_img(img: Image, f: Vector2, t: Vector2, th: float, col: Color
 # ============================================================
 func _spawn_anchor() -> void:
 	var a: float = randf_range(0.0, TAU)
-	var d: float = randf_range(300.0, 550.0)
+	var d: float = randf_range(_anchor_spawn_min, _anchor_spawn_max)
 	anchor.global_position = player.global_position + Vector2.RIGHT.rotated(a) * d
 	_wrap(anchor)
 	hex_poly.scale = Vector2.ONE
@@ -1017,6 +1043,15 @@ func _physics_process(delta: float) -> void:
 
 	# 锚点范围检测必须始终运行（不受风场状态影响）
 	var _in_anchor_now := _is_in_anchor_range()
+	# 风场翻转（关卡3+）
+	if _wind_flip_timer > 0.0:
+		_wind_flip_timer -= delta
+		if _wind_flip_timer <= 0.0:
+			var flip_dir: float = randf_range(-TAU * 0.4, TAU * 0.4) + PI
+			wind_vector = wind_vector.rotated(flip_dir)
+			_show_storm_warning("⚠ 风暴方向突变！")
+			_wind_flip_timer = 20.0 + randf_range(-5.0, 5.0)
+
 	if _wind_active and not _in_anchor_now:
 		player.velocity += wind_vector * delta
 	player.velocity *= LIN_DRAG
@@ -1601,8 +1636,8 @@ func _update_scan(delta: float) -> void:
 		if _scan_timer > 0.0:
 			_scan_timer = maxf(0.0, _scan_timer - delta * 0.5)  # 松开 W 时扫描进度缓慢衰减
 
-	var pct: int = int(clampf(_scan_timer / SCAN_DURATION, 0.0, 1.0) * 100.0)
-	var prog: float = clampf(_scan_timer / SCAN_DURATION, 0.0, 1.0)
+	var pct: int = int(clampf(_scan_timer / _scan_duration, 0.0, 1.0) * 100.0)
+	var prog: float = clampf(_scan_timer / _scan_duration, 0.0, 1.0)
 
 	# 更新进度条
 	if _scan_progress_bg != null and _scan_progress_bar != null:
@@ -1630,7 +1665,7 @@ func _update_scan(delta: float) -> void:
 			signal_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.4, 0.8))
 
 
-	if _scan_timer >= SCAN_DURATION:
+	if _scan_timer >= _scan_duration:
 		_on_scan_complete()
 
 
@@ -1694,7 +1729,6 @@ func _on_scan_complete() -> void:
 		scan_completed.emit(true)
 		search_zone_scanned.emit(true)
 		_anchor_set_visible(true)
-		_show_hint_text("信号锁定！信标已标记")
 		signal_label.text = ">>> 信号锁定 <<<"
 		signal_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.4, 1.0))
 		# 闪烁消失特效：信标从 0 缩放到 1
@@ -1710,7 +1744,6 @@ func _on_scan_complete() -> void:
 		_cleanup_search_zones()
 	else:
 		# 空圈
-		scan_completed.emit(false)
 		search_zone_scanned.emit(false)
 		_show_hint_text("此区域无救援信号")
 		signal_label.text = "搜索中..."
@@ -1718,7 +1751,7 @@ func _on_scan_complete() -> void:
 
 
 func _update_sos_beacon(_delta: float) -> void:
-	## 当玩家距离隐藏信标 ≤ 200 时，信标以 SOS 频率闪烁
+	## 当玩家距离隐藏信标足够近时，信标以 SOS 频率闪烁（距离随关卡变化）
 	if _beacon_revealed:
 		return  # 已锁定则不闪烁
 
@@ -1726,7 +1759,7 @@ func _update_sos_beacon(_delta: float) -> void:
 		return
 
 	var dist: float = player.global_position.distance_to(anchor.global_position)
-	if dist > 200.0:
+	if dist > _sos_blink_dist:
 		return
 
 	# SOS 节奏：0.3s 亮 → 0.3s 灭 → 0.3s 亮 → 0.3s 灭 → 0.3s 亮 → 0.7s 灭 → 0.7s 灭 → 重复 (周期 3.2s)

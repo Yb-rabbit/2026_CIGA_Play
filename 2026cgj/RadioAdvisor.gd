@@ -103,9 +103,6 @@ func _bind_signals() -> void:
 		if _onboard_system.has_signal("thrust_limited"):
 			_onboard_system.thrust_limited.connect(_on_thrust_limited)
 
-	if _game_scene.has_signal("scan_completed"):
-		_game_scene.scan_completed.connect(_on_scan_completed)
-
 	if _game_scene.has_signal("decoy_collided"):
 		_game_scene.decoy_collided.connect(_on_decoy_collided)
 
@@ -137,22 +134,15 @@ func _on_decoy_collided() -> void:
 	_show_message("[飞控电脑]", "赝品信标触碰！燃料快速流失，立即脱离接触区域。", Color(0.9, 0.2, 0.6))
 
 func _on_search_zone_entered() -> void:
-	var now: float = Time.get_ticks_msec() * 0.001
-	if now - _zone_entry_cooldown >= ZONE_ENTRY_COOLDOWN:
-		_zone_entry_cooldown = now
-		_show_message("[声呐]", "已进入信号搜索区域，按住W键进行扫描。", Color(0.3, 1.0, 0.8))
+	pass  # 搜索圈进入提示已由 signal_label 和进度条可视化代替，无需机载播报
 
 func _on_search_zone_scanned(has_beacon: bool) -> void:
 	if has_beacon:
-		_show_message("[声呐]", "搜索完毕，已锁定遇险信标坐标，航线已更新。", Color(0.3, 1.0, 0.5))
+		_show_message("[传感器]", "搜索完毕，已锁定遇险信标坐标，航线已更新。", Color(0.3, 1.0, 0.5))
 	else:
-		_show_message("[声呐]", "区域扫描完毕，未发现生命信号，转移至下一区域。", Color(0.4, 0.8, 1.0))
+		_show_message("[传感器]", "区域扫描完毕，未发现生命信号，转移至下一区域。", Color(0.4, 0.8, 1.0))
 
 
-func _on_scan_completed(has_beacon: bool) -> void:
-	if has_beacon:
-		return
-	_show_message("[声呐]", "扫描完毕，未发现生命信号，建议转移至下一区域。", Color(0.4, 0.8, 1.0))
 
 
 func _show_message(sender: String, msg: String, clr: Color) -> void:
@@ -168,7 +158,7 @@ func _show_message(sender: String, msg: String, clr: Color) -> void:
 	label.offset_left = 700.0
 	label.offset_top = top
 	label.offset_right = 1560.0
-	label.offset_bottom = top + 80.0
+	label.offset_bottom = top + float(LABEL_HEIGHT)
 
 	_container.add_child(label)
 	_active_labels.append(label)
