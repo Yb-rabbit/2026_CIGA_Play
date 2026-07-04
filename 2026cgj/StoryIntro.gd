@@ -28,11 +28,16 @@ const STORY_TEXTS: Dictionary = {
 	+ "[color=#888]公元 2147 年，深空货运航线被未知干扰场笼罩。[/color]\n\n"
 	+ "你的飞船「破晓号」在一次航线跳跃中偏离航道，\n"
 	+ "导航系统全部失灵，燃料所剩无几。\n\n"
-	+ "唯一的求生手段，是依靠舱内仅存的\n"
-	+ "[color=#ff6644]短距信标探测器[/color]——\n"
-	+ "一把在黑暗中寻找希望之光的钥匙。\n\n"
-	+ "[color=#aaa]\"听着，飞行员，如果你能听到这个——\n"
-	+ "找到信标，然后活下去。\"[/color]",
+	+ "[color=#ff6644]操作提示：[/color]\n"
+	+ "[color=#44aaff]A / D 键[/color] 旋转飞船方向\n"
+	+ "[color=#44aaff]W 键[/color] 加速推进（消耗燃料）\n"
+	+ "[color=#44aaff]S 键[/color] 减速 / 按住抛锚建立临时锚点\n"
+	+ "[color=#44aaff]Esc 键[/color] 暂停游戏\n\n"
+	+ "[color=#aaa]目标：将罗盘红色指针指向正上方，\n"
+	+ "向红色六边形的信标前进。\n"
+	+ "注意区分紫色叉号的虚假信标！[/color]\n\n"
+	+ "[color=#ffaa44]首次救援后，电磁风暴将开始激活——\n"
+	+ "做好准备！[/color]",
 
 	2: "[center][font_size=36]第二章：陨石迷宫[/font_size][/center]\n\n"
 	+ "[color=#888]穿越第一片碎片区后，前方传来密集的金属回波。[/color]\n\n"

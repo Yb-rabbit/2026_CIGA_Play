@@ -2,20 +2,20 @@ extends Node2D
 ## ============================================================
 ## GameScene — 核心游戏关卡
 ## 重构自 game.gd，适配多场景架构 + GameManager 全局单例
-## 新增 S 级难度系统：虚假信标、电磁干扰区、信号遮蔽云
 ## ============================================================
 
 # ==================== 关卡参数 ====================
-const RESCUES_PER_LEVEL: int = 4             # 每关需要救援次数
+const RESCUES_PER_LEVEL: int = 3             # 每关需要救援次数
 const FUEL_MAX: float = 100.0                 # 最大燃料
-const FUEL_BURN: float = 18.0                # W 键每秒油耗
-const FUEL_REFILL: float = 40.0              # 救援成功回油量
+const FUEL_BURN: float = 12.0                # W 键每秒油耗
+const FUEL_REFILL: float = 55.0              # 救援成功回油量
 
 # ==================== 风场 ====================
 var wind_vector: Vector2 = Vector2.ZERO       # 初始无风（渐进式）
 var _wind_active: bool = false
 var _first_rescue_done: bool = false
-const BASE_WIND: float = 80.0                 # 基础风力
+
+const BASE_WIND: float = 60.0                 # 基础风力
 
 # ==================== 飞行参数 ====================
 const THRUST: float = 320.0
@@ -26,10 +26,10 @@ const LIN_DRAG: float = 0.992
 const MAX_SPD: float = 420.0
 
 # ==================== 本地游戏状态 ====================
-var _session_score: int = 0
-var _rescue_count: int = 0
+var _session_score: int = 0                   # 本局得分（同步到 GameManager.high_score）
+var _rescue_count: int = 0                    # 本关已救援次数
 var _game_over: bool = false
-var rescuing: bool = false
+var rescuing: bool = false                    # 正在播放救援缩放动画
 
 # ==================== 节点引用 ====================
 var player: CharacterBody2D
@@ -62,7 +62,7 @@ var dist_label: Label
 var hint_label: Label
 var game_over_label: Label
 var signal_label: Label
-var _tutorial_label: Label = null
+var _tutorial_label: Label = null            # 关卡1 教学提示（首帧显示）
 
 # 锚点系统
 var anchor_node: Node2D = null
@@ -73,10 +73,10 @@ var anchor_circle_poly: Polygon2D
 var anchor_dash_node: Node2D
 
 # ==================== S 级难度系统 ====================
-# 虚假信标 (Decoy — 紫色六边形+X)
+# 虚假信标 (Decoy — 紫色六边形，碰撞后扣油 + 弹飞)
 var _decoy_nodes: Array[Area2D] = []
-const DECOY_FUEL_DRAIN: float = 22.0
-const DECOY_KNOCKBACK: float = 520.0
+const DECOY_FUEL_DRAIN: float = 15.0
+const DECOY_KNOCKBACK: float = 350.0
 
 # 电磁干扰区 (EMI — 罗盘抖动 + 信号乱码)
 var _emi_zones: Array[Dictionary] = []
@@ -85,13 +85,6 @@ var _emi_zones: Array[Dictionary] = []
 var _fog_nodes: Array[Area2D] = []
 var _in_fog: bool = false
 var _fog_draw_node: Node2D
-
-# ==================== 推进音效 ====================
-var _thrust_stream: AudioStreamPlayer
-var _thrust_stream_pb: AudioStreamGeneratorPlayback
-var _thrust_samples_left: int = 0
-const _thrust_sample_total: int = 0  # 从 .wav 计算
-var _thrust_audio_data: PackedFloat32Array
 
 # 程序化音频
 var audio_player: AudioStreamPlayer
@@ -118,6 +111,7 @@ func _ready() -> void:
 	# ---- 从 GameManager 同步初始化数据 ----
 	GameManager.set_game_state(GameManager.GameState.PLAYING)
 
+	# 燃料：优先使用 GameManager 缓存值（跨场景传递）
 	if GameManager.fuel <= 0.0:
 		GameManager.fuel = FUEL_MAX
 	else:
@@ -125,27 +119,29 @@ func _ready() -> void:
 
 	# 风力初始化：渐进式——关卡1从零风开始
 	var level := GameManager.current_level
-	var wind_mult: float = 1.0 + float(level - 1) * 0.5
+	var wind_mult: float = 1.0 + float(level - 1) * 0.5   # Lv1=1.0, Lv2=1.5, Lv3=2.0
 	if level == 1:
+		# 关卡 1：渐进风，初始无风
 		wind_vector = Vector2.ZERO
 		_wind_active = false
 	else:
+		# 关卡 2+：完整风力
 		var na: float = randf_range(0.0, TAU)
 		wind_vector = Vector2.RIGHT.rotated(na) * BASE_WIND * wind_mult
 		_wind_active = true
 
-	# 构建场景（顺序至关重要：player 必须在 hazards 之前）
+	# 构建场景
 	_build_stars()
+	_build_hazards()
 
 	trail_node = Node2D.new()
 	trail_node.name = "TrailNode"
 	add_child(trail_node)
 	trail_node.draw.connect(_draw_trail)
 
-	_build_player()        # 1. 先创建 player（hazards 依赖 player.position）
+	_build_player()
 	_build_camera()
 	_build_anchor()
-	_build_hazards()       # 2. 再创建虚假信标/EMI/遮蔽云
 	_build_ui()
 	_spawn_anchor()
 
@@ -159,13 +155,38 @@ func _ready() -> void:
 	add_child(_fog_draw_node)
 
 	_build_audio()
-	_build_thrust_audio()
 
+	# 更新 UI 初始值
 	score_label.text = "救援: %d" % _session_score
 	_update_fuel()
 
+	# 关卡 1 教学提示（5 秒后渐隐）
 	if level == 1:
 		_spawn_tutorial_hint()
+
+
+# ============================================================
+# 教学提示 (关卡 1 专属)
+# ============================================================
+func _spawn_tutorial_hint() -> void:
+	_tutorial_label = Label.new()
+	_tutorial_label.name = "TutorialHint"
+	_tutorial_label.text = "A/D 旋转飞船 | W 加速推进 | S 减速/抛锚\n将红色罗盘指针指向正上方，找到信标！"
+	_tutorial_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_tutorial_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_tutorial_label.add_theme_font_size_override("font_size", 30)
+	_tutorial_label.add_theme_color_override("font_color", Color(0.3, 0.9, 1.0, 0.9))
+	_tutorial_label.add_theme_font_override("font", _font)
+	_tutorial_label.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
+	_tutorial_label.position = Vector2(-450, 400)
+	_tutorial_label.size = Vector2(900, 80)
+	add_child(_tutorial_label)
+
+	# 8 秒后渐隐
+	var tw := create_tween()
+	tw.tween_interval(6.0)
+	tw.tween_property(_tutorial_label, "modulate:a", 0.0, 2.0)
+	tw.tween_callback(_tutorial_label.queue_free)
 
 
 # ============================================================
@@ -193,28 +214,7 @@ func _open_pause_menu() -> void:
 
 
 # ============================================================
-# 教学提示 (关卡 1 专属)
-# ============================================================
-func _spawn_tutorial_hint() -> void:
-	_tutorial_label = Label.new()
-	_tutorial_label.name = "TutorialHint"
-	_tutorial_label.text = "A/D 旋转飞船 | W 加速推进 | S 减速/抛锚\n将红色罗盘指针指向正上方，找到信标！"
-	_tutorial_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_tutorial_label.add_theme_font_size_override("font_size", 30)
-	_tutorial_label.add_theme_color_override("font_color", Color(0.3, 0.9, 1.0, 0.9))
-	_tutorial_label.add_theme_font_override("font", _font)
-	_tutorial_label.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
-	_tutorial_label.position = Vector2(-450, 400)
-	_tutorial_label.size = Vector2(900, 80)
-	add_child(_tutorial_label)
-	var tw := create_tween()
-	tw.tween_interval(6.0)
-	tw.tween_property(_tutorial_label, "modulate:a", 0.0, 2.0)
-	tw.tween_callback(_tutorial_label.queue_free)
-
-
-# ============================================================
-# 玩家
+# 玩家 构建
 # ============================================================
 func _build_player() -> void:
 	player = CharacterBody2D.new()
@@ -231,7 +231,10 @@ func _build_player() -> void:
 	body_poly = Polygon2D.new()
 	body_poly.name = "Body"
 	body_poly.polygon = PackedVector2Array([
-		Vector2(16, 0), Vector2(-10, -9), Vector2(-6, 0), Vector2(-10, 9),
+		Vector2(16, 0),
+		Vector2(-10, -9),
+		Vector2(-6, 0),
+		Vector2(-10, 9),
 	])
 	body_poly.color = Color(0.9, 0.95, 1.0)
 	player.add_child(body_poly)
@@ -239,7 +242,9 @@ func _build_player() -> void:
 	flame_poly = Polygon2D.new()
 	flame_poly.name = "Flame"
 	flame_poly.polygon = PackedVector2Array([
-		Vector2(-10, -5), Vector2(-28, 0), Vector2(-10, 5),
+		Vector2(-10, -5),
+		Vector2(-28, 0),
+		Vector2(-10, 5),
 	])
 	flame_poly.color = Color(1.0, 0.55, 0.1, 0.8)
 	flame_poly.visible = false
@@ -323,7 +328,7 @@ func _build_decoy(dpos: Vector2) -> Area2D:
 	col_shape.shape = circle
 	da.add_child(col_shape)
 
-	# 紫色六边形
+	# 紫色六边形（虚假信标）
 	const R := 18.0
 	var dpts := PackedVector2Array()
 	for i: int in range(6):
@@ -335,6 +340,7 @@ func _build_decoy(dpos: Vector2) -> Area2D:
 	dpoly.color = Color(0.6, 0.2, 0.9, 0.7)
 	da.add_child(dpoly)
 
+	# 紫色边框
 	var dborder := Line2D.new()
 	dborder.name = "DecoyBorder"
 	dborder.width = 1.2
@@ -347,17 +353,18 @@ func _build_decoy(dpos: Vector2) -> Area2D:
 	dborder.points = dbpts
 	da.add_child(dborder)
 
-	# X 标记
-	var x1 := Line2D.new()
-	x1.width = 2.0
-	x1.default_color = Color(0.8, 0.3, 0.9, 0.5)
-	x1.points = PackedVector2Array([Vector2(-8, -8), Vector2(8, 8)])
-	da.add_child(x1)
-	var x2 := Line2D.new()
-	x2.width = 2.0
-	x2.default_color = Color(0.8, 0.3, 0.9, 0.5)
-	x2.points = PackedVector2Array([Vector2(8, -8), Vector2(-8, 8)])
-	da.add_child(x2)
+	# X 标记（明确区分）
+	var xline1 := Line2D.new()
+	xline1.width = 2.0
+	xline1.default_color = Color(0.8, 0.3, 0.9, 0.5)
+	xline1.points = PackedVector2Array([Vector2(-8, -8), Vector2(8, 8)])
+	da.add_child(xline1)
+
+	var xline2 := Line2D.new()
+	xline2.width = 2.0
+	xline2.default_color = Color(0.8, 0.3, 0.9, 0.5)
+	xline2.points = PackedVector2Array([Vector2(8, -8), Vector2(-8, 8)])
+	da.add_child(xline2)
 
 	da.body_entered.connect(_on_decoy_collision)
 	return da
@@ -377,13 +384,13 @@ func _build_fog_cloud(center: Vector2, radius: float) -> Area2D:
 	col_shape.shape = circle
 	fa.add_child(col_shape)
 
-	fa.body_entered.connect(_on_fog_entered)
-	fa.body_exited.connect(_on_fog_exited)
+	fa.body_entered.connect(_on_fog_entered.bind(fa))
+	fa.body_exited.connect(_on_fog_exited.bind(fa))
 	return fa
 
 
 # ============================================================
-# 灾害系统 — 构建
+# 灾害系统 — 构建出厂
 # ============================================================
 func _build_hazards() -> void:
 	var level := GameManager.current_level
@@ -391,9 +398,9 @@ func _build_hazards() -> void:
 	# ---- 虚假信标 ----
 	var decoy_count: int
 	match level:
-		1: decoy_count = 1
-		2: decoy_count = 3
-		_: decoy_count = 5
+		1: decoy_count = 0   # 教程关无赝品
+		2: decoy_count = 2
+		_: decoy_count = 3   # 关卡 3 最多
 
 	for i: int in range(decoy_count):
 		var da: float = randf_range(0.0, TAU)
@@ -406,25 +413,25 @@ func _build_hazards() -> void:
 	# ---- 电磁干扰区 ----
 	var emi_count: int
 	match level:
-		1: emi_count = 1
-		2: emi_count = 2
-		_: emi_count = 3
+		1: emi_count = 0
+		2: emi_count = 1
+		_: emi_count = 2
 
 	for i: int in range(emi_count):
 		var ea: float = randf_range(0.0, TAU)
 		var ed: float = randf_range(500.0, 1000.0)
 		_emi_zones.append({
 			"pos": player.position + Vector2.RIGHT.rotated(ea) * ed,
-			"radius": randf_range(220.0, 350.0),
+			"radius": randf_range(180.0, 280.0),
 			"seed": randf_range(0.0, TAU)
 		})
 
 	# ---- 信号遮蔽云 ----
 	var fog_count: int
 	match level:
-		1: fog_count = 1
-		2: fog_count = 2
-		_: fog_count = 3
+		1: fog_count = 0
+		2: fog_count = 1
+		_: fog_count = 2
 
 	for i: int in range(fog_count):
 		var fa: float = randf_range(0.0, TAU)
@@ -432,7 +439,7 @@ func _build_hazards() -> void:
 		var fcenter := player.position + Vector2.RIGHT.rotated(fa) * fd
 		var fradius: float = randf_range(100.0, 150.0)
 		var fog := _build_fog_cloud(fcenter, fradius)
-		fog.set_meta("fog_radius", fradius)
+		fog.set_meta("fog_radius", fradius)  # 存半径供绘制
 		add_child(fog)
 		_fog_nodes.append(fog)
 
@@ -441,17 +448,20 @@ func _build_hazards() -> void:
 # 虚假信标碰撞回调
 # ============================================================
 func _on_decoy_collision(body: Node2D) -> void:
-	if body != player or _game_over:
+	if body != player:
 		return
+	# 扣油
 	GameManager.fuel = maxf(0.0, GameManager.fuel - DECOY_FUEL_DRAIN)
 	if GameManager.fuel <= 0.0:
 		GameManager.fuel = 0.0
 		_on_game_over_fuel()
 		return
+	# 弹飞
 	var away: Vector2 = (player.global_position - body.global_position).normalized()
 	if away.length() < 0.1:
 		away = Vector2.RIGHT.rotated(randf_range(0.0, TAU))
 	player.velocity += away * DECOY_KNOCKBACK
+	# 闪烁提示
 	_show_hint_text("赝品信标！燃料 -%d" % int(DECOY_FUEL_DRAIN))
 	_update_fuel()
 
@@ -459,55 +469,17 @@ func _on_decoy_collision(body: Node2D) -> void:
 # ============================================================
 # 遮蔽云 — 进入/离开
 # ============================================================
-func _on_fog_entered(body: Node2D) -> void:
+func _on_fog_entered(body: Node2D, fog_area: Area2D) -> void:
 	if body == player:
 		_in_fog = true
 
-func _on_fog_exited(body: Node2D) -> void:
+func _on_fog_exited(body: Node2D, fog_area: Area2D) -> void:
 	if body == player:
 		_in_fog = false
 
 
 # ============================================================
-# 推进音效
-# ============================================================
-func _build_thrust_audio() -> void:
-	_thrust_stream = AudioStreamPlayer.new()
-	_thrust_stream.name = "ThrustStream"
-	add_child(_thrust_stream)
-
-	var gen := AudioStreamGenerator.new()
-	gen.mix_rate = AUDIO_SAMPLE_RATE
-	gen.buffer_length = 0.05
-	_thrust_stream.stream = gen
-	_thrust_stream.volume_db = -8.0
-	_thrust_stream.play()
-
-	_thrust_stream_pb = _thrust_stream.get_stream_playback()
-
-	# 尝试加载 Power_Put.wav 并转换为样本数据
-	if ResourceLoader.exists("res://Power_Put.wav"):
-		var wav_file := FileAccess.open("res://Power_Put.wav", FileAccess.READ)
-		if wav_file != null:
-			var raw_bytes: PackedByteArray = wav_file.get_buffer(wav_file.get_length())
-			wav_file.close()
-			# 跳过 WAV 头（44 字节），读取 16-bit PCM 数据
-			if raw_bytes.size() > 44:
-				var pcm16 := PackedByteArray()
-				for i: int in range(44, raw_bytes.size() - 1):
-					pcm16.append(raw_bytes[i])
-				# 解码为 float
-				var samples := PackedFloat32Array()
-				for i: int in range(0, pcm16.size() - 1, 2):
-					var s16: int = pcm16[i] | (pcm16[i + 1] << 8)
-					if s16 >= 32768:
-						s16 -= 65536
-					samples.append(float(s16) / 32768.0)
-				_thrust_audio_data = samples
-
-
-# ============================================================
-# UI (CanvasLayer)
+# UI (CanvasLayer) — 与原始版本完全一致（增加 Esc 提示）
 # ============================================================
 func _build_ui() -> void:
 	_font = load("res://YuFanDanQingSong.otf") as Font
@@ -571,7 +543,7 @@ func _build_ui() -> void:
 	score_label.add_theme_font_override("font", _font)
 	ui.add_child(score_label)
 
-	# ---- 距离 ----
+	# ---- 距离 (罗盘下方) ----
 	dist_label = Label.new()
 	dist_label.position = Vector2(1600 - 224, 210)
 	dist_label.size = Vector2(190, 28)
@@ -581,7 +553,7 @@ func _build_ui() -> void:
 	dist_label.add_theme_font_override("font", _font)
 	ui.add_child(dist_label)
 
-	# ---- 信号报告 ----
+	# ---- 就近信号报告 (罗盘下方第二条) ----
 	signal_label = Label.new()
 	signal_label.position = Vector2(1600 - 224, 240)
 	signal_label.size = Vector2(190, 32)
@@ -626,6 +598,7 @@ func _make_compass_tex() -> ImageTexture:
 	img.fill(Color(0, 0, 0, 0))
 	var c := Vector2(s / 2.0, s / 2.0)
 	var r := float(s / 2.0) - 4.0
+
 	for y: int in range(s):
 		for x: int in range(s):
 			var d: float = Vector2(x, y).distance_to(c)
@@ -633,11 +606,13 @@ func _make_compass_tex() -> ImageTexture:
 				img.set_pixel(x, y, Color(0.2, 0.8, 1.0, 0.9))
 			elif d < r - 3.0 and d > 5.0:
 				img.set_pixel(x, y, Color(0.06, 0.08, 0.16, 0.85))
+
 	var tc := Color(0.3, 0.9, 1.0, 0.95)
 	for i: int in range(4):
 		var a: float = i * PI / 2.0 - PI / 2.0
 		var d := Vector2(cos(a), sin(a))
 		_draw_line_on_img(img, c + d * (r - 18.0), c + d * (r - 2.0), 2.5, tc)
+
 	return ImageTexture.create_from_image(img)
 
 
@@ -690,6 +665,7 @@ func _spawn_anchor() -> void:
 	var d: float = randf_range(300.0, 550.0)
 	anchor.global_position = player.global_position + Vector2.RIGHT.rotated(a) * d
 	_wrap(anchor)
+
 	hex_poly.scale = Vector2.ONE
 	hex_border.scale = Vector2.ONE
 	rescue_ring.scale = Vector2.ONE
@@ -701,23 +677,29 @@ func _spawn_anchor() -> void:
 func _on_rescue(_b: Node2D) -> void:
 	if _game_over or rescuing:
 		return
+
+	# 只能救援真实信标
+	if _b != anchor:
+		return
+
 	rescuing = true
 	_rescue_count += 1
 	_session_score += int(100 + _rescue_count * 15)
 
+	# 同步到 GameManager
 	GameManager.fuel = minf(FUEL_MAX, GameManager.fuel + FUEL_REFILL)
 	if _session_score > GameManager.high_score:
 		GameManager.high_score = _session_score
 
 	score_label.text = "救援: %d" % _session_score
 
-	# 渐进式风力
+	# 渐进式风力：第一次救援后激活风力（关卡 1 专属）
 	var level := GameManager.current_level
 	if level == 1 and not _first_rescue_done:
 		_first_rescue_done = true
 		_wind_active = true
-		var wind_mult: float = 1.0
-		var fraction: float = 0.3 + float(_rescue_count) * 0.35
+		var wind_mult: float = 1.0 + float(level - 1) * 0.5
+		var fraction: float = 0.3 + float(_rescue_count) * 0.35  # 30%, 65%, 100%
 		var na: float = randf_range(0.0, TAU)
 		wind_vector = Vector2.RIGHT.rotated(na) * BASE_WIND * wind_mult * fraction
 		_show_hint_text("警告：电磁风暴正在增强！")
@@ -727,6 +709,7 @@ func _on_rescue(_b: Node2D) -> void:
 		var ns: float = BASE_WIND * wind_mult + float(_rescue_count) * 25.0
 		wind_vector = Vector2.RIGHT.rotated(na) * ns
 
+	# 缩放消失动画
 	var tw := create_tween()
 	tw.set_parallel(true)
 	tw.tween_property(hex_poly, "scale", Vector2.ZERO, 0.35).set_ease(Tween.EASE_IN)
@@ -740,6 +723,9 @@ func _on_rescue(_b: Node2D) -> void:
 	tw.finished.connect(_on_rescue_done)
 
 
+# ============================================================
+# 救援动画完成 → 判断是否通关
+# ============================================================
 func _on_rescue_done() -> void:
 	if _rescue_count >= RESCUES_PER_LEVEL:
 		_level_complete()
@@ -748,15 +734,19 @@ func _on_rescue_done() -> void:
 		rescuing = false
 
 
+# ============================================================
+# 关卡通关
+# ============================================================
 func _level_complete() -> void:
 	GameManager.high_score = maxi(GameManager.high_score, _session_score)
 	GameManager.complete_level(GameManager.current_level)
+
 	await get_tree().create_timer(0.8).timeout
 	GameManager.change_scene("LevelSelect")
 
 
 # ============================================================
-# Game Over / Restart
+# Game Over
 # ============================================================
 func _on_game_over_fuel() -> void:
 	_game_over = true
@@ -766,6 +756,9 @@ func _on_game_over_fuel() -> void:
 	flame_poly.visible = false
 
 
+# ============================================================
+# 重新开始
+# ============================================================
 func _restart() -> void:
 	GameManager.fuel = FUEL_MAX
 	GameManager.change_scene("GameScene")
@@ -793,8 +786,6 @@ func _physics_process(delta: float) -> void:
 	if thrusting:
 		player.velocity += Vector2.RIGHT.rotated(player.rotation) * THRUST * delta
 		GameManager.fuel = maxf(0.0, GameManager.fuel - FUEL_BURN * delta)
-		# 推进音效
-		_fill_thrust_buffer()
 		if GameManager.fuel <= 0.0:
 			GameManager.fuel = 0.0
 			_on_game_over_fuel()
@@ -805,6 +796,7 @@ func _physics_process(delta: float) -> void:
 			var force: float = minf(BRAKE * delta, spd)
 			player.velocity -= player.velocity.normalized() * force
 
+	# 风力仅在有信号时应用
 	if _wind_active and not _is_in_anchor_range():
 		player.velocity += wind_vector * delta
 	player.velocity *= LIN_DRAG
@@ -848,6 +840,7 @@ func _process(_delta: float) -> void:
 		elif Input.is_key_pressed(KEY_M):
 			_go_to_main_menu()
 
+	# 雷达探测音（遮蔽云中静音）
 	if not _game_over and anchor != null and not _in_fog:
 		var dist: float = player.global_position.distance_to(anchor.global_position)
 		beep_timer -= _delta
@@ -866,29 +859,19 @@ func _process(_delta: float) -> void:
 
 
 # ============================================================
-# 推进力音效填充
-# ============================================================
-func _fill_thrust_buffer() -> void:
-	if _thrust_stream_pb == null or _thrust_audio_data == null or _thrust_audio_data.size() == 0:
-		return
-	var to_fill: int = _thrust_stream_pb.get_frames_available()
-	if to_fill <= 0:
-		return
-	for _i: int in range(to_fill):
-		_thrust_samples_left = (_thrust_samples_left + 1) % _thrust_audio_data.size()
-		var val: float = _thrust_audio_data[_thrust_samples_left] * 0.25
-		_thrust_stream_pb.push_frame(Vector2(val, val))
-
-
-# ============================================================
 # 灾害更新
 # ============================================================
-func _update_hazards(_d: float) -> void:
+func _update_hazards(_delta: float) -> void:
+	# 虚假信标呼吸动效
 	for da in _decoy_nodes:
 		if da == null:
 			continue
-		da.scale = Vector2(sin(Time.get_ticks_msec() * 0.002) * 0.06 + 1.0, sin(Time.get_ticks_msec() * 0.002) * 0.06 + 1.0)
+		var breath: float = sin(Time.get_ticks_msec() * 0.002) * 0.06 + 1.0
+		da.scale = Vector2(breath, breath)
 
+	# EMI 区域静默（仅罗盘受影响，无需帧更新）
+
+	# 遮蔽云绘制委托
 	_fog_draw_node.draw.connect(_draw_fog_clouds, CONNECT_ONE_SHOT)
 	_fog_draw_node.queue_redraw()
 
@@ -898,10 +881,13 @@ func _draw_fog_clouds() -> void:
 		if fa == null:
 			continue
 		var r: float = fa.get_meta("fog_radius", 100.0)
+		# 暗蓝灰色半透明雾气
 		for layer: int in range(3):
 			var lr: float = r - float(layer) * 25.0
-			if lr < 10.0: continue
-			_fog_draw_node.draw_circle(fa.global_position, lr, Color(0.3, 0.35, 0.5, 0.06 + float(layer) * 0.03))
+			if lr < 10.0:
+				continue
+			var alpha: float = 0.06 + float(layer) * 0.03
+			_fog_draw_node.draw_circle(fa.global_position, lr, Color(0.3, 0.35, 0.5, alpha))
 
 
 # ============================================================
@@ -912,6 +898,7 @@ func _update_compass() -> void:
 	var dist: float = to.length()
 	dist_label.text = "最近距离: %.0f pc" % dist
 
+	# 遮蔽云中罗盘完全失效
 	if _in_fog:
 		compass_needle.visible = false
 		compass_ripple.visible = false
@@ -922,12 +909,13 @@ func _update_compass() -> void:
 	compass_needle.visible = true
 	var jitter_angle: float = 0.0
 
+	# 检查 EMI 区域
 	for zone in _emi_zones:
 		var dz: float = player.global_position.distance_to(zone["pos"])
 		if dz < zone["radius"]:
-			var intensity: float = 1.0 - (dz / zone["radius"])
+			var intensity: float = 1.0 - (dz / zone["radius"])  # 0~1，中心最强
 			var phase: float = Time.get_ticks_msec() * 0.003 + zone["seed"]
-			jitter_angle = sin(phase) * 35.0 * intensity
+			jitter_angle = sin(phase) * 25.0 * intensity  # 最多 ±25°
 			break
 
 	if dist > 0.5:
@@ -950,6 +938,7 @@ func _update_compass() -> void:
 	compass_ripple.modulate.a = ripple_alpha
 	compass_ripple.rotation += 0.008
 
+	# EMI 区域信号文字变为乱码
 	if absf(jitter_angle) > 2.0:
 		signal_label.text = _scramble_text(dist)
 		signal_label.add_theme_color_override("font_color", Color(0.7, 0.4, 1.0, 0.8))
@@ -958,12 +947,18 @@ func _update_compass() -> void:
 
 
 func _scramble_text(dist: float) -> String:
+	# 乱码字符池
 	const chars := "!@#$%^&*()_+-=[]{}|;:,.<>?/~`"
 	var base: String
-	if dist > 250.0:      base = "信号微弱"
-	elif dist > 120.0:    base = "信号增强"
-	elif dist > 40.0:     base = "信号强烈!"
-	else:                  base = ">>> 已到达 <<<"
+	if dist > 250.0:
+		base = "信号微弱"
+	elif dist > 120.0:
+		base = "信号增强"
+	elif dist > 40.0:
+		base = "信号强烈!"
+	else:
+		base = ">>> 已到达 <<<"
+	# 在原文中随机插入乱码字符
 	var result := ""
 	for i: int in range(base.length()):
 		result += base[i]
@@ -978,13 +973,16 @@ func _scramble_text(dist: float) -> String:
 func _update_fuel() -> void:
 	var r: float = GameManager.fuel / FUEL_MAX
 	fuel_fill.size.x = 232.0 * r
-	if r > 0.4:          fuel_fill.color = Color(0.2, 0.85, 0.5, 0.9)
-	elif r > 0.15:        fuel_fill.color = Color(1.0, 0.7, 0.1, 0.9)
-	else:                  fuel_fill.color = Color(1.0, 0.15, 0.1, 0.9)
+	if r > 0.4:
+		fuel_fill.color = Color(0.2, 0.85, 0.5, 0.9)
+	elif r > 0.15:
+		fuel_fill.color = Color(1.0, 0.7, 0.1, 0.9)
+	else:
+		fuel_fill.color = Color(1.0, 0.15, 0.1, 0.9)
 
 
 # ============================================================
-# 信号报告
+# 就近信号报告
 # ============================================================
 func _update_signal_report(dist: float) -> void:
 	if dist > 500.0:
@@ -995,12 +993,12 @@ func _update_signal_report(dist: float) -> void:
 		signal_label.add_theme_color_override("font_color", Color(0.6, 0.7, 0.9, 0.6))
 	elif dist > 120.0:
 		signal_label.text = "信号增强"
-		var p: float = sin(Time.get_ticks_msec() * 0.005) * 0.15 + 0.85
-		signal_label.add_theme_color_override("font_color", Color(0.8, 0.9, 1.0, p))
+		var pulse: float = sin(Time.get_ticks_msec() * 0.005) * 0.15 + 0.85
+		signal_label.add_theme_color_override("font_color", Color(0.8, 0.9, 1.0, pulse))
 	elif dist > 40.0:
 		signal_label.text = "信号强烈!"
-		var p: float = sin(Time.get_ticks_msec() * 0.01) * 0.3 + 0.7
-		signal_label.add_theme_color_override("font_color", Color(1.0, 1.0, 0.5, p))
+		var pulse: float = sin(Time.get_ticks_msec() * 0.01) * 0.3 + 0.7
+		signal_label.add_theme_color_override("font_color", Color(1.0, 1.0, 0.5, pulse))
 	else:
 		signal_label.text = ">>> 已到达 <<<"
 		var flash: float = sin(Time.get_ticks_msec() * 0.015) * 0.5 + 0.5
@@ -1008,7 +1006,7 @@ func _update_signal_report(dist: float) -> void:
 
 
 # ============================================================
-# 提示文字（临时弹出）
+# 提示文字（临时弹出，2 秒后消失）
 # ============================================================
 func _show_hint_text(msg: String) -> void:
 	var ht := Label.new()
@@ -1021,6 +1019,7 @@ func _show_hint_text(msg: String) -> void:
 	ht.position = Vector2(-300, 320)
 	ht.size = Vector2(600, 50)
 	add_child(ht)
+
 	var tw := create_tween()
 	tw.tween_interval(2.0)
 	tw.tween_callback(ht.queue_free)
@@ -1032,13 +1031,17 @@ func _show_hint_text(msg: String) -> void:
 func _draw_trail() -> void:
 	if _game_over or player.velocity.length() < 5.0:
 		return
+
 	var vel_dir: Vector2 = player.velocity.normalized()
 	var vel_len: float = player.velocity.length()
 	var trail_len: float = clamp(vel_len * 0.45, 30.0, DASH_MAX)
+
 	var alpha: float = clamp(vel_len / 180.0, 0.1, 0.55)
 	var dash_color := Color(0.1, 0.95, 1.0, alpha)
+
 	var start_pos: Vector2 = player.global_position + vel_dir * 6.0
-	var offset: float = dash_offset
+	var dash_ofs: float = dash_offset
+
 	var pos: float = 0.0
 	var drawing := true
 	while pos < trail_len:
@@ -1046,8 +1049,8 @@ func _draw_trail() -> void:
 		if drawing:
 			var from: Vector2 = start_pos + vel_dir * pos
 			var to: Vector2 = start_pos + vel_dir * seg_end
-			from -= vel_dir * offset
-			to -= vel_dir * offset
+			from -= vel_dir * dash_ofs
+			to -= vel_dir * dash_ofs
 			var fade: float = 1.0 - (pos / trail_len)
 			var col := Color(dash_color, dash_color.a * fade)
 			trail_node.draw_line(from, to, col, 1.3)
@@ -1066,6 +1069,7 @@ func _animate_hexagon() -> void:
 	hex_border.scale = Vector2(breath, breath)
 	rescue_ring.scale = Vector2(breath, breath)
 	rescue_ring.default_color.a = 0.2 + breath * 0.2
+
 	var bright: float = 0.75 + breath * 0.25
 	hex_poly.color = Color(1.0 * bright, 0.25 * bright, 0.2 * bright, 0.9)
 
@@ -1076,7 +1080,9 @@ func _animate_hexagon() -> void:
 func _anim_flame() -> void:
 	var rng: float = randf_range(-3.0, 3.0)
 	flame_poly.polygon = PackedVector2Array([
-		Vector2(-10, -5 + rng), Vector2(-22 - randf_range(0.0, 8.0), 0.0), Vector2(-10, 5 - rng),
+		Vector2(-10, -5 + rng),
+		Vector2(-22 - randf_range(0.0, 8.0), 0.0),
+		Vector2(-10, 5 - rng),
 	])
 	flame_poly.color = Color(1.0, 0.45 + randf_range(0.0, 0.25), 0.05, 0.7 + randf_range(0.0, 0.3))
 
@@ -1089,11 +1095,16 @@ func _build_stars() -> void:
 	star_node.name = "Stars"
 	star_node.z_index = -10
 	add_child(star_node)
+
 	_stars.clear()
 	_stars_phase.clear()
 	for i: int in range(80):
-		_stars.append(Vector2(randf_range(-1600.0, 1600.0), randf_range(-1000.0, 1000.0)))
+		_stars.append(Vector2(
+			randf_range(-1600.0, 1600.0),
+			randf_range(-1000.0, 1000.0)
+		))
 		_stars_phase.append(randf_range(0.0, TAU))
+
 	star_node.draw.connect(_draw_stars.bind(star_node))
 
 
@@ -1110,9 +1121,13 @@ func _draw_stars(node: Node2D) -> void:
 func _do_anchor_drop() -> void:
 	if GameManager.fuel < ANCHOR_FUEL_COST:
 		return
+
 	_remove_anchor()
+
 	GameManager.fuel = maxf(0.0, GameManager.fuel - ANCHOR_FUEL_COST)
+
 	_spawn_anchor_node(player.global_position)
+
 	_trigger_anchor_sound()
 
 
@@ -1121,6 +1136,7 @@ func _spawn_anchor_node(pos: Vector2) -> void:
 	anchor_node.name = "AnchorPoint"
 	anchor_node.global_position = pos
 	add_child(anchor_node)
+
 	anchor_circle_poly = Polygon2D.new()
 	anchor_circle_poly.name = "AnchorCircle"
 	const SEG := 64
@@ -1131,6 +1147,7 @@ func _spawn_anchor_node(pos: Vector2) -> void:
 	anchor_circle_poly.polygon = pts
 	anchor_circle_poly.color = Color(0.2, 0.5, 1.0, 0.18)
 	anchor_node.add_child(anchor_circle_poly)
+
 	var ring := Line2D.new()
 	ring.name = "AnchorRing"
 	ring.width = 1.5
@@ -1142,6 +1159,7 @@ func _spawn_anchor_node(pos: Vector2) -> void:
 		rpts.append(Vector2(cos(a), sin(a)) * ANCHOR_RADIUS)
 	ring.points = rpts
 	anchor_node.add_child(ring)
+
 	anchor_active = true
 	anchor_dash_node.visible = true
 
@@ -1157,7 +1175,8 @@ func _remove_anchor() -> void:
 func _is_in_anchor_range() -> bool:
 	if not anchor_active or anchor_node == null:
 		return false
-	if player.global_position.distance_to(anchor_node.global_position) > ANCHOR_RADIUS:
+	var dist: float = player.global_position.distance_to(anchor_node.global_position)
+	if dist > ANCHOR_RADIUS:
 		_remove_anchor()
 		return false
 	return true
@@ -1166,10 +1185,12 @@ func _is_in_anchor_range() -> bool:
 func _draw_anchor_dash() -> void:
 	if not anchor_active or anchor_node == null:
 		return
+
 	var from: Vector2 = player.global_position
 	var to: Vector2 = anchor_node.global_position
 	var dir: Vector2 = (to - from).normalized()
 	var total: float = from.distance_to(to)
+
 	const DASH := 12.0
 	const GAP := 8.0
 	var pos: float = 0.0
@@ -1177,7 +1198,12 @@ func _draw_anchor_dash() -> void:
 	while pos < total:
 		var seg_end: float = minf(pos + (DASH if draw_on else GAP), total)
 		if draw_on:
-			anchor_dash_node.draw_line(from + dir * pos, from + dir * seg_end, Color(0.4, 0.75, 1.0, 0.55), 1.0)
+			anchor_dash_node.draw_line(
+				from + dir * pos,
+				from + dir * seg_end,
+				Color(0.4, 0.75, 1.0, 0.55),
+				1.0
+			)
 		pos = seg_end
 		draw_on = not draw_on
 
@@ -1189,22 +1215,28 @@ func _build_audio() -> void:
 	audio_player = AudioStreamPlayer.new()
 	audio_player.name = "AudioPlayer"
 	add_child(audio_player)
+
 	audio_gen = AudioStreamGenerator.new()
 	audio_gen.mix_rate = AUDIO_SAMPLE_RATE
 	audio_gen.buffer_length = AUDIO_BUFFER_LEN
 	audio_player.stream = audio_gen
 	audio_player.play()
+
 	audio_playback = audio_player.get_stream_playback()
 
 
 func _fill_audio_buffer() -> void:
 	if audio_playback == null:
 		return
+
 	var to_fill: int = audio_playback.get_frames_available()
 	if to_fill <= 0:
 		return
+
 	for _i: int in range(to_fill):
 		var val: float = 0.0
+
+		# 雷达滴声
 		if _beep_samples_left > 0:
 			var total: int = int(AUDIO_SAMPLE_RATE * 0.08)
 			var elapsed: int = total - _beep_samples_left
@@ -1215,6 +1247,8 @@ func _fill_audio_buffer() -> void:
 				env = float(_beep_samples_left) / float(fade_smp)
 			val += sin(t * TAU * _beep_freq) * env * 0.3
 			_beep_samples_left -= 1
+
+		# 抛锚音效
 		if _anchor_sound_left > 0:
 			var total: int = int(AUDIO_SAMPLE_RATE * 0.1)
 			var elapsed: int = total - _anchor_sound_left
@@ -1222,6 +1256,7 @@ func _fill_audio_buffer() -> void:
 			var env: float = exp(-t * 18.0)
 			val += sin(t * TAU * 200.0) * env * 0.5
 			_anchor_sound_left -= 1
+
 		val = clampf(val, -1.0, 1.0)
 		audio_playback.push_frame(Vector2(val, val))
 
@@ -1236,7 +1271,11 @@ func _trigger_anchor_sound() -> void:
 func _wrap(n: Node2D) -> void:
 	const W := 3200.0
 	const H := 2000.0
-	if n.global_position.x > W / 2.0:  n.global_position.x -= W
-	elif n.global_position.x < -W / 2.0: n.global_position.x += W
-	if n.global_position.y > H / 2.0:  n.global_position.y -= H
-	elif n.global_position.y < -H / 2.0: n.global_position.y += H
+	if n.global_position.x > W / 2.0:
+		n.global_position.x -= W
+	elif n.global_position.x < -W / 2.0:
+		n.global_position.x += W
+	if n.global_position.y > H / 2.0:
+		n.global_position.y -= H
+	elif n.global_position.y < -H / 2.0:
+		n.global_position.y += H

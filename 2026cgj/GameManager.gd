@@ -4,6 +4,26 @@ extends Node
 ## 负责：游戏状态管理、关卡解锁、跨场景数据、场景切换
 ## ============================================================
 
+# ==================== 淡入淡出覆盖层 ====================
+var _fade_overlay: ColorRect
+var _fading: bool = false
+
+func _enter_tree() -> void:
+	# 创建专用 CanvasLayer（Control 必须在 CanvasLayer 下才能渲染）
+	var overlay_layer := CanvasLayer.new()
+	overlay_layer.name = "FadeLayer"
+	overlay_layer.layer = 4096  # 最高渲染层
+
+	_fade_overlay = ColorRect.new()
+	_fade_overlay.name = "FadeOverlay"
+	_fade_overlay.color = Color(0.0, 0.0, 0.0, 0.0)
+	_fade_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_fade_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	overlay_layer.add_child(_fade_overlay)
+
+	# 添加到 root，确保在所有场景节点之上
+	get_tree().root.call_deferred("add_child", overlay_layer)
+
 # ==================== 游戏状态枚举 ====================
 enum GameState {
 	MENU,
@@ -32,7 +52,38 @@ signal state_changed(new_state: GameState)
 # 场景切换
 # ============================================================
 func change_scene(scene_name: String) -> void:
-	## 封装场景切换逻辑
+	_fade_switch(scene_name)
+
+
+# ============================================================
+# 淡入淡出切换（异步）
+# ============================================================
+func _fade_switch(scene_name: String) -> void:
+	if _fading:
+		return
+	_fading = true
+
+	# 步骤 1：淡出（黑屏覆盖）
+	if _fade_overlay != null:
+		var tw := create_tween()
+		tw.tween_property(_fade_overlay, "color:a", 1.0, 0.25).set_ease(Tween.EASE_OUT)
+		await tw.finished
+
+	# 步骤 2：执行实际场景切换
+	_do_change_scene(scene_name)
+
+	# 步骤 3：淡入（黑屏消去）
+	await get_tree().process_frame  # 等新场景构建完一帧
+	if _fade_overlay != null:
+		var tw2 := create_tween()
+		tw2.tween_property(_fade_overlay, "color:a", 0.0, 0.35).set_ease(Tween.EASE_IN)
+		await tw2.finished
+
+	_fading = false
+
+
+func _do_change_scene(scene_name: String) -> void:
+	## 封装场景切换逻辑（无动画）
 	## 优先级：.tscn 文件 → 以 scene_name 本身作为路径 → .gd 脚本动态构建场景
 	var scene_path: String = "res://%s.tscn" % scene_name
 
@@ -53,7 +104,6 @@ func change_scene(scene_name: String) -> void:
 	# 3) 回退：尝试加载 .gd 脚本并动态构建场景（适用于纯脚本 UI）
 	var script_path: String = "res://%s.gd" % scene_name
 	if not ResourceLoader.exists(script_path):
-		# 如果 scene_name 本身以 .gd 结尾
 		if scene_name.ends_with(".gd") and ResourceLoader.exists(scene_name):
 			script_path = scene_name
 		else:
@@ -65,7 +115,6 @@ func change_scene(scene_name: String) -> void:
 		push_error("[GameManager] 脚本加载失败: %s" % script_path)
 		return
 
-	# 根据脚本继承的类型创建根节点
 	var root: Node
 	var base := gd.get_instance_base_type()
 	match base:
@@ -78,12 +127,10 @@ func change_scene(scene_name: String) -> void:
 	root.set_script(gd)
 	root.name = scene_name
 
-	# 先加入场景树，否则 get_viewport() 为 null
 	get_tree().root.add_child(root)
 	get_tree().current_scene.queue_free()
 	get_tree().current_scene = root
 
-	# Control / CanvasLayer 需要显式设置全屏尺寸（必须在加入场景树之后）
 	if root is Control:
 		var vpr := root.get_viewport().get_visible_rect()
 		root.position = Vector2.ZERO
