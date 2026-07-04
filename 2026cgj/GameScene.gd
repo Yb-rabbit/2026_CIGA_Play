@@ -10,6 +10,9 @@ extends Node2D
 signal scan_completed(has_beacon: bool)
 ## 风暴增强信号：level 表示当前风暴等级（1, 2, 3...）
 signal storm_intensified(level: int)
+signal decoy_collided()
+signal search_zone_entered()
+signal search_zone_scanned(has_beacon: bool)
 
 # ==================== 关卡参数 ====================
 const RESCUES_PER_LEVEL: int = 4             # 每关需要救援次数
@@ -68,6 +71,8 @@ var dist_label: Label
 var hint_label: Label
 var game_over_label: Label
 var signal_label: Label
+var _scan_progress_bg: ColorRect = null  # 搜索进度条背景
+var _scan_progress_bar: ColorRect = null # 搜索进度条填充
 var _tutorial_label: Label = null
 var _storm_label: Label = null           # 风暴警报（系统 UI）
 var _storm_timer: float = 0.0            # 风暴提示残留计时器
@@ -95,6 +100,7 @@ var _emi_zones: Array[Dictionary] = []
 var _fog_nodes: Array[Area2D] = []
 var _in_fog: bool = false
 var _fog_draw_node: Node2D
+var _emi_draw_node: Node2D = null            # EMI 区域绘制节点
 
 # ==================== 搜索圈 + 扫描锁定系统 ====================
 ## SearchZone 数组：每个字典包含 { "node": Area2D, "has_beacon": bool, "radius": float }
@@ -103,9 +109,11 @@ var _in_search_zone: bool = false                   # 飞船当前是否在搜�
 var _current_search_zone: Dictionary = {}           # 当前所在的搜索圈
 var _beacon_revealed: bool = false                   # 信标是否已被锁定并显示
 var _scan_timer: float = 0.0                         # 扫描计时器（按住 W 累计）
-const SCAN_DURATION: float = 0.8                     # 扫描需要按住 W 的秒数
+const SCAN_DURATION: float = 0.6                     # 扫描需要按住 W 的秒数
 var _is_scanning: bool = false                       # 是否正在进行扫描
 var _compass_locked: bool = false                    # 罗盘是否已锁定目标
+var _last_scan_pct: int = -1                         # 上次显示的扫描百分比（防重复刷新）
+var _last_w_held: bool = false                       # 上次 W 键状态
 var _search_zones_draw_node: Node2D                  # 搜索圈绘制节点
 
 # ==================== 推进音效 ====================
@@ -190,6 +198,12 @@ func _ready() -> void:
 	_fog_draw_node = Node2D.new()
 	_fog_draw_node.name = "FogDraw"
 	add_child(_fog_draw_node)
+
+	# EMI 区域绘制节点
+	_emi_draw_node = Node2D.new()
+	_emi_draw_node.name = "EmiDraw"
+	add_child(_emi_draw_node)
+	_emi_draw_node.draw.connect(_draw_emi_zones)
 
 	_build_audio()
 	_build_thrust_audio()
@@ -299,9 +313,9 @@ func _spawn_tutorial_hint() -> void:
 	_tutorial_label.add_theme_font_size_override("font_size", 30)
 	_tutorial_label.add_theme_color_override("font_color", Color(0.3, 0.9, 1.0, 0.9))
 	_tutorial_label.add_theme_font_override("font", _font)
-	_tutorial_label.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
-	_tutorial_label.position = Vector2(-450, 400)
-	_tutorial_label.size = Vector2(900, 80)
+	_tutorial_label.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_LEFT)
+	_tutorial_label.position = Vector2(30, -90)
+	_tutorial_label.size = Vector2(700, 60)
 	add_child(_tutorial_label)
 	var tw := create_tween()
 	tw.tween_interval(6.0)
@@ -548,6 +562,31 @@ func _on_decoy_collision(body: Node2D) -> void:
 	if away.length() < 0.1:
 		away = Vector2.RIGHT.rotated(randf_range(0.0, TAU))
 	player.velocity += away * DECOY_KNOCKBACK
+	decoy_collided.emit()
+
+	# 弹开变形动画：玩家飞船被挤压 + 恢复
+	var player_tw := create_tween()
+	player_tw.tween_property(body_poly, "scale", Vector2(0.7, 1.3), 0.08)
+	player_tw.tween_property(body_poly, "scale", Vector2(1.15, 0.85), 0.1)
+	player_tw.tween_property(body_poly, "scale", Vector2.ONE, 0.12)
+
+	# 假信标被撞击的变形：紫色六边形挤压 + X 标记闪烁
+	if is_instance_valid(body):
+		var decoy_body := body.get_node_or_null("DecoyBody")
+		if decoy_body is Polygon2D:
+			var dtw := create_tween()
+			dtw.tween_property(decoy_body, "scale", Vector2(1.4, 0.6), 0.06)
+			dtw.tween_property(decoy_body, "scale", Vector2(0.8, 1.2), 0.08)
+			dtw.tween_property(decoy_body, "scale", Vector2.ONE, 0.1)
+		for child in body.get_children():
+			if child is Line2D:
+				var ltw := create_tween()
+				ltw.set_parallel(true)
+				ltw.tween_property(child, "default_color", Color(1.0, 0.2, 1.0, 1.0), 0.05)
+				ltw.tween_property(child, "default_color", Color(0.8, 0.3, 0.9, 0.5), 0.15)
+				ltw.tween_property(child, "width", 4.0, 0.05)
+				ltw.tween_property(child, "width", 2.0, 0.15)
+
 	_show_hint_text("赝品信标！燃料 -%d" % int(DECOY_FUEL_DRAIN))
 	_update_fuel()
 
@@ -687,6 +726,21 @@ func _build_ui() -> void:
 	signal_label.add_theme_font_override("font", _font)
 	signal_label.text = "搜索中..."
 	ui.add_child(signal_label)
+
+	# ---- 扫描进度条 (信号标签下方，默认隐藏) ----
+	_scan_progress_bg = ColorRect.new()
+	_scan_progress_bg.position = Vector2(1600 - 224 + 8, 276)
+	_scan_progress_bg.size = Vector2(174, 8)
+	_scan_progress_bg.color = Color(0.05, 0.1, 0.2, 0.8)
+	_scan_progress_bg.visible = false
+	ui.add_child(_scan_progress_bg)
+
+	_scan_progress_bar = ColorRect.new()
+	_scan_progress_bar.position = Vector2(1600 - 224 + 8, 276)
+	_scan_progress_bar.size = Vector2(0, 8)
+	_scan_progress_bar.color = Color(0.2, 0.9, 0.6, 0.9)
+	_scan_progress_bar.visible = false
+	ui.add_child(_scan_progress_bar)
 
 	# ---- 操作提示 (底部中央) ----
 	hint_label = Label.new()
@@ -891,6 +945,10 @@ func _on_rescue_done() -> void:
 		_level_complete()
 	else:
 		_spawn_anchor()
+		_anchor_set_visible(false)
+		_compass_locked = false
+		_beacon_revealed = false
+		_build_search_zones()
 		rescuing = false
 
 
@@ -957,7 +1015,9 @@ func _physics_process(delta: float) -> void:
 			var force: float = minf(BRAKE * delta, spd)
 			player.velocity -= player.velocity.normalized() * force
 
-	if _wind_active and not _is_in_anchor_range():
+	# 锚点范围检测必须始终运行（不受风场状态影响）
+	var _in_anchor_now := _is_in_anchor_range()
+	if _wind_active and not _in_anchor_now:
 		player.velocity += wind_vector * delta
 	player.velocity *= LIN_DRAG
 
@@ -1046,6 +1106,33 @@ func _update_hazards(_d: float) -> void:
 
 	_fog_draw_node.draw.connect(_draw_fog_clouds, CONNECT_ONE_SHOT)
 	_fog_draw_node.queue_redraw()
+
+
+# ============================================================
+# EMI 区域绘制 — 紫色脉冲干扰变形圆环
+# ============================================================
+func _draw_emi_zones() -> void:
+	if _emi_draw_node == null:
+		return
+	var t: float = Time.get_ticks_msec() * 0.001
+
+	for zone in _emi_zones:
+		var zpos: Vector2 = zone["pos"]
+		var zr: float = zone["radius"]
+		var zone_seed: float = zone["seed"]
+
+		var intensity: float = absf(sin(t * 1.5 + zone_seed)) * 0.25 + 0.15
+
+		# 变形圆环（带波形扰动）
+		const SEG := 48
+		var pts := PackedVector2Array()
+		for j: int in range(SEG + 1):
+			var a: float = TAU * float(j) / float(SEG)
+			var r: float = zr + sin(a * 5.0 + t * 2.0 + zone_seed) * 15.0
+			pts.append(zpos + Vector2(cos(a), sin(a)) * r)
+
+		_emi_draw_node.draw_colored_polygon(pts, Color(0.5, 0.2, 0.8, intensity * 0.3))
+		_emi_draw_node.draw_polyline(pts + PackedVector2Array([Vector2(cos(0), sin(0)) * zr]), Color(0.7, 0.3, 1.0, intensity), 2.0)
 
 
 func _draw_fog_clouds() -> void:
@@ -1420,8 +1507,10 @@ func _build_search_zones() -> void:
 		var has_beacon: bool = false
 
 		if i == beacon_zone_index:
-			# 信标圈：以信标位置为中心（偏移极小），确保信标一定在圈内
-			sz.global_position = beacon_pos + Vector2(randf_range(-20, 20), randf_range(-20, 20))
+			# 信标圈：偏移信标 100~200px，不直接暴露精确坐标
+			var offset_angle: float = randf_range(0.0, TAU)
+			var offset_dist: float = randf_range(100.0, 200.0)
+			sz.global_position = beacon_pos + Vector2.RIGHT.rotated(offset_angle) * offset_dist
 			has_beacon = true
 		else:
 			# 其他圈：散布在玩家周围较近距离，确保可见
@@ -1467,6 +1556,7 @@ func _on_search_zone_entered(body: Node2D, zone_data: Dictionary) -> void:
 	_in_search_zone = true
 	_current_search_zone = zone_data
 	_scan_timer = 0.0
+	search_zone_entered.emit()
 	signal_label.text = "进入信号搜索区..."
 	signal_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.8, 1.0))
 
@@ -1501,13 +1591,44 @@ func _update_scan(delta: float) -> void:
 	if zd == null or zd.is_empty() or zd.get("scanned", false):
 		return
 
-	# 自动扫描：进入搜索圈后自动累进
-	_is_scanning = true
-	_scan_timer += delta
+	# W 键加速扫描：按住 W 时累进扫描进度
+	var w_held: bool = Input.is_action_pressed("ui_up")
+	if w_held:
+		_is_scanning = true
+		_scan_timer += delta
+	else:
+		_is_scanning = false
+		if _scan_timer > 0.0:
+			_scan_timer = maxf(0.0, _scan_timer - delta * 0.5)  # 松开 W 时扫描进度缓慢衰减
 
 	var pct: int = int(clampf(_scan_timer / SCAN_DURATION, 0.0, 1.0) * 100.0)
-	signal_label.text = "扫描中... %d%%" % pct
-	signal_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.8, 1.0))
+	var prog: float = clampf(_scan_timer / SCAN_DURATION, 0.0, 1.0)
+
+	# 更新进度条
+	if _scan_progress_bg != null and _scan_progress_bar != null:
+		_scan_progress_bg.visible = true
+		_scan_progress_bar.visible = true
+		_scan_progress_bar.size.x = 174.0 * prog
+		# 进度条颜色：未按 W 时偏灰，按住时亮绿
+		if w_held:
+			_scan_progress_bar.color = Color(0.2, 0.9, 0.6, 0.9)
+		else:
+			_scan_progress_bar.color = Color(0.3, 0.6, 0.5, 0.6)
+
+	# 信号文字区分状态（仅在百分比或 W 键状态变化时更新，避免每帧闪烁）
+	if pct != _last_scan_pct or w_held != _last_w_held:
+		_last_scan_pct = pct
+		_last_w_held = w_held
+		if w_held:
+			signal_label.text = "扫描中... %d%%" % pct
+			signal_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.8, 1.0))
+		elif _scan_timer > 0.01:
+			signal_label.text = "扫描中断... %d%%" % pct
+			signal_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.5, 0.9))
+		else:
+			signal_label.text = "按住 W 开始扫描..."
+			signal_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.4, 0.8))
+
 
 	if _scan_timer >= SCAN_DURATION:
 		_on_scan_complete()
@@ -1523,7 +1644,7 @@ func _draw_search_zones() -> void:
 	for zd in _search_zones:
 		if zd == null or zd.get("node") == null:
 			continue
-		var node: Area2D = zd["node"]
+		var _node: Area2D = zd["node"]
 		var r: float = zd["radius"]
 		var scanned: bool = zd.get("scanned", false)
 
@@ -1571,6 +1692,7 @@ func _on_scan_complete() -> void:
 	if zd.get("has_beacon", false):
 		# 发现信标！
 		scan_completed.emit(true)
+		search_zone_scanned.emit(true)
 		_anchor_set_visible(true)
 		_show_hint_text("信号锁定！信标已标记")
 		signal_label.text = ">>> 信号锁定 <<<"
@@ -1589,6 +1711,7 @@ func _on_scan_complete() -> void:
 	else:
 		# 空圈
 		scan_completed.emit(false)
+		search_zone_scanned.emit(false)
 		_show_hint_text("此区域无救援信号")
 		signal_label.text = "搜索中..."
 		signal_label.add_theme_color_override("font_color", Color(0.4, 0.6, 0.8, 0.4))
@@ -1610,13 +1733,13 @@ func _update_sos_beacon(_delta: float) -> void:
 	# 简化为 sine 平方波模拟：快闪三下 + 停顿
 	var t: float = fmod(Time.get_ticks_msec() * 0.001, 3.2)
 
-	var visible: bool = false
+	var beacon_visible: bool = false
 	if t < 0.3 or (t >= 0.6 and t < 0.9) or (t >= 1.2 and t < 1.5):
-		visible = true
+		beacon_visible = true
 
-	hex_poly.visible = visible
-	hex_border.visible = visible
-	rescue_ring.visible = visible
+	hex_poly.visible = beacon_visible
+	hex_border.visible = beacon_visible
+	rescue_ring.visible = beacon_visible
 
 
 func _cleanup_search_zones() -> void:

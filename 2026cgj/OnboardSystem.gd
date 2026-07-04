@@ -18,8 +18,8 @@ signal thrust_limited(is_limited: bool)
 @export var status_label: Label = null
 
 # ==================== 过热保护常量 ====================
-const OVERHEAT_WARN_TIME: float = 3.0        ## 持续按住 W 超过此秒数 → 触发过热警告
-const OVERHEAT_LIMIT_TIME: float = 5.0        ## 持续按住 W 超过此秒数 → 触发保底推力限制
+const OVERHEAT_WARN_TIME: float = 1.5         ## 持续按住 W 超过此秒数 → 触发过热警告
+const OVERHEAT_LIMIT_TIME: float = 2.5        ## 持续按住 W 超过此秒数 → 触发保底推力限制
 const COOLDOWN_TIME: float = 0.5              ## 松开 W 后恢复正常的冷却秒数
 const LIMITED_THRUST_RATIO: float = 0.6       ## 限制期间推力衰减至 60%
 const LIMITED_FUEL_BURN_RATIO: float = 1.2    ## 限制期间油耗提升至 120%（模拟引擎低效空转）

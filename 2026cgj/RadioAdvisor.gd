@@ -9,8 +9,8 @@ var _onboard_system: Node = null
 var _game_scene: Node = null
 
 const DISPLAY_SECONDS: float = 6.0
-const FONT_SIZE: int = 22
-const LABEL_HEIGHT: int = 32
+const FONT_SIZE: int = 26
+const LABEL_HEIGHT: int = 38
 
 var _font: FontFile = null
 var _active_labels: Array[Label] = []
@@ -18,6 +18,8 @@ var _overheat_warned_already: bool = false
 var _canvas: CanvasLayer = null
 var _container: Control = null
 var _idle_timer: float = 0.0
+var _zone_entry_cooldown: float = 0.0        # 搜索圈进入播报冷却计时器
+const ZONE_ENTRY_COOLDOWN: float = 15.0      # 搜索圈播报最短间隔
 const IDLE_INTERVAL: float = 18.0  # 每18秒发送一次空闲消息
 
 
@@ -104,8 +106,14 @@ func _bind_signals() -> void:
 	if _game_scene.has_signal("scan_completed"):
 		_game_scene.scan_completed.connect(_on_scan_completed)
 
-	if _game_scene.has_signal("storm_intensified"):
-		_game_scene.storm_intensified.connect(_on_storm_intensified)
+	if _game_scene.has_signal("decoy_collided"):
+		_game_scene.decoy_collided.connect(_on_decoy_collided)
+
+	if _game_scene.has_signal("search_zone_entered"):
+		_game_scene.search_zone_entered.connect(_on_search_zone_entered)
+
+	if _game_scene.has_signal("search_zone_scanned"):
+		_game_scene.search_zone_scanned.connect(_on_search_zone_scanned)
 
 
 func _on_overheat_warning(is_overheating: bool) -> void:
@@ -123,6 +131,22 @@ func _on_thrust_limited(is_limited: bool) -> void:
 
 func _on_storm_intensified(level: int) -> void:
 	_show_message("[气象雷达]", "电磁风暴增强至第%d级，注意偏航修正！" % level, Color(1.0, 0.5, 0.1))
+
+
+func _on_decoy_collided() -> void:
+	_show_message("[飞控电脑]", "赝品信标触碰！燃料快速流失，立即脱离接触区域。", Color(0.9, 0.2, 0.6))
+
+func _on_search_zone_entered() -> void:
+	var now: float = Time.get_ticks_msec() * 0.001
+	if now - _zone_entry_cooldown >= ZONE_ENTRY_COOLDOWN:
+		_zone_entry_cooldown = now
+		_show_message("[声呐]", "已进入信号搜索区域，按住W键进行扫描。", Color(0.3, 1.0, 0.8))
+
+func _on_search_zone_scanned(has_beacon: bool) -> void:
+	if has_beacon:
+		_show_message("[声呐]", "搜索完毕，已锁定遇险信标坐标，航线已更新。", Color(0.3, 1.0, 0.5))
+	else:
+		_show_message("[声呐]", "区域扫描完毕，未发现生命信号，转移至下一区域。", Color(0.4, 0.8, 1.0))
 
 
 func _on_scan_completed(has_beacon: bool) -> void:

@@ -24,7 +24,7 @@ var _zone_alpha: float = 0.0                 # 搜索圈闪烁相位
 const ZONE_SPEED: float = 25.0               # 搜索圈移动速度 (px/s)
 
 # 状态文本参数
-var _status_texts: Array[String] = ["巡航中", "引擎过热（43%）", "动力限制中", "信号锁定"]
+var _status_texts: Array[String] = ["巡航中", "猫寻星mx 呈现", "动力限制中", "信号锁定"]
 var _status_index: int = 0
 var _status_hold: float = 0.0                # 当前状态停留时间
 var _status_flash: float = 0.0               # 文本闪烁相位
@@ -124,7 +124,7 @@ func _ready() -> void:
 	_status_label.add_theme_font_size_override("font_size", 28)
 	_status_label.add_theme_font_override("font", _font)
 	_status_label.set_anchors_and_offsets_preset(Control.PRESET_CENTER_BOTTOM)
-	_status_label.position = Vector2(-300, -50)
+	_status_label.position = Vector2(-300, -90)
 	_status_label.size = Vector2(600, 30)
 	add_child(_status_label)
 
@@ -209,8 +209,8 @@ func _process(delta: float) -> void:
 
 		if st == "巡航中":
 			_status_label.add_theme_color_override("font_color", Color(0.3, 0.9, 0.5, flash_a))
-		elif st == "引擎过热（43%）":
-			_status_label.add_theme_color_override("font_color", Color(1.0, 0.7, 0.1, flash_a))
+		elif st == "猫寻星mx 呈现":
+			_status_label.add_theme_color_override("font_color", Color(1.0, 0.9, 0.3, flash_a))
 		elif st == "动力限制中":
 			_status_label.add_theme_color_override("font_color", Color(1.0, 0.2, 0.1, flash_a))
 		elif st == "信号锁定":
@@ -299,8 +299,8 @@ func _draw() -> void:
 	var st: String = _status_texts[_status_index]
 	var flash_a: float = absf(sin(_status_flash)) * 0.4 + 0.3
 	var st_color: Color = Color(0.3, 0.9, 0.5, flash_a)
-	if st == "引擎过热（43%）":
-		st_color = Color(1.0, 0.7, 0.1, flash_a)
+	if st == "猫寻星mx 呈现":
+		st_color = Color(1.0, 0.9, 0.3, flash_a)
 	elif st == "动力限制中":
 		st_color = Color(1.0, 0.2, 0.1, flash_a)
 	elif st == "信号锁定":
