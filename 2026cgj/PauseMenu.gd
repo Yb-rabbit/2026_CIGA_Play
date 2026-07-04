@@ -28,7 +28,7 @@ func _ready() -> void:
 	# ---- 居中面板 ----
 	var panel := Panel.new()
 	panel.name = "Panel"
-	panel.size = Vector2(360, 340)
+	panel.size = Vector2(420, 400)
 
 	var panel_style := StyleBoxFlat.new()
 	panel_style.bg_color = Color(0.04, 0.06, 0.14, 0.92)
@@ -52,10 +52,10 @@ func _ready() -> void:
 	title.name = "Title"
 	title.text = "游戏暂停"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 40)
+	title.add_theme_font_size_override("font_size", 48)
 	title.add_theme_color_override("font_color", Color(0.4, 0.85, 1.0, 0.9))
 	title.add_theme_font_override("font", _font)
-	title.size = Vector2(360, 50)
+	title.size = Vector2(360, 65)
 	title.position = Vector2(0, 20)
 	panel.add_child(title)
 
@@ -115,8 +115,8 @@ func _notification(what: int) -> void:
 func _make_button(text: String, callback: Callable) -> Button:
 	var btn := Button.new()
 	btn.text = text
-	btn.size = Vector2(240, 52)
-	btn.add_theme_font_size_override("font_size", 26)
+	btn.size = Vector2(280, 60)
+	btn.add_theme_font_size_override("font_size", 30)
 	btn.add_theme_font_override("font", _font)
 	btn.add_theme_color_override("font_color", Color.WHITE)
 

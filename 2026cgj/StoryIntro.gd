@@ -99,12 +99,12 @@ func _ready() -> void:
 	_rich_label.fit_content = true
 	_rich_label.scroll_following = true
 	_rich_label.selection_enabled = false
-	_rich_label.add_theme_font_size_override("normal_font_size", 26)
+	_rich_label.add_theme_font_size_override("normal_font_size", 30)
 	_rich_label.add_theme_font_override("normal_font", _font)
 	_rich_label.add_theme_color_override("default_color", Color(0.75, 0.8, 0.9, 1.0))
 	_rich_label.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
-	_rich_label.position = Vector2(-360, -240)
-	_rich_label.size = Vector2(720, 450)
+	_rich_label.position = Vector2(-400, -280)
+	_rich_label.size = Vector2(800, 520)
 	add_child(_rich_label)
 
 	# ---- "点击以跳过" 提示 ----
@@ -112,11 +112,11 @@ func _ready() -> void:
 	skip_hint.name = "SkipHint"
 	skip_hint.text = "点击屏幕可跳过 / 继续"
 	skip_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	skip_hint.add_theme_font_size_override("font_size", 18)
+	skip_hint.add_theme_font_size_override("font_size", 22)
 	skip_hint.add_theme_color_override("font_color", Color(0.35, 0.35, 0.45, 0.5))
 	skip_hint.add_theme_font_override("font", _font)
 	skip_hint.set_anchors_and_offsets_preset(Control.PRESET_CENTER_BOTTOM)
-	skip_hint.position = Vector2(-300, -150)
+	skip_hint.position = Vector2(-300, -80)
 	skip_hint.size = Vector2(600, 30)
 	add_child(skip_hint)
 

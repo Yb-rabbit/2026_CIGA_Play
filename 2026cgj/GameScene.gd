@@ -1501,15 +1501,7 @@ func _update_scan(delta: float) -> void:
 	if zd == null or zd.is_empty() or zd.get("scanned", false):
 		return
 
-	# 必须按住 W 键才能扫描
-	if not Input.is_action_pressed("ui_up"):
-		# 松开 W 则进度衰减（缓慢回落，而非清零）
-		_scan_timer = maxf(0.0, _scan_timer - delta * 2.0)
-		if _scan_timer <= 0.0:
-			_is_scanning = false
-		return
-
-	# 按住 W → 累积扫描进度
+	# 自动扫描：进入搜索圈后自动累进
 	_is_scanning = true
 	_scan_timer += delta
 
