@@ -5,10 +5,16 @@ extends Node2D
 ## 新增 S 级难度系统：虚假信标、电磁干扰区、信号遮蔽云
 ## ============================================================
 
+# ==================== 信号 ====================
+## 扫描完成信号：has_beacon=true 表示找到信标，false 表示空圈
+signal scan_completed(has_beacon: bool)
+## 风暴增强信号：level 表示当前风暴等级（1, 2, 3...）
+signal storm_intensified(level: int)
+
 # ==================== 关卡参数 ====================
 const RESCUES_PER_LEVEL: int = 4             # 每关需要救援次数
 const FUEL_MAX: float = 100.0                 # 最大燃料
-const FUEL_BURN: float = 18.0                # W 键每秒油耗
+const FUEL_BURN: float = 10.0                # W 键每秒油耗（降低，给警告系统更多应用空间）
 const FUEL_REFILL: float = 40.0              # 救援成功回油量
 
 # ==================== 风场 ====================
@@ -63,6 +69,10 @@ var hint_label: Label
 var game_over_label: Label
 var signal_label: Label
 var _tutorial_label: Label = null
+var _storm_label: Label = null           # 风暴警报（系统 UI）
+var _storm_timer: float = 0.0            # 风暴提示残留计时器
+var _onboard_system: Node = null         # 飞控电脑节点
+var _bgm_player: AudioStreamPlayer = null # 背景音乐播放器
 
 # 锚点系统
 var anchor_node: Node2D = null
@@ -85,6 +95,18 @@ var _emi_zones: Array[Dictionary] = []
 var _fog_nodes: Array[Area2D] = []
 var _in_fog: bool = false
 var _fog_draw_node: Node2D
+
+# ==================== 搜索圈 + 扫描锁定系统 ====================
+## SearchZone 数组：每个字典包含 { "node": Area2D, "has_beacon": bool, "radius": float }
+var _search_zones: Array[Dictionary] = []
+var _in_search_zone: bool = false                   # 飞船当前是否在搜索圈内
+var _current_search_zone: Dictionary = {}           # 当前所在的搜索圈
+var _beacon_revealed: bool = false                   # 信标是否已被锁定并显示
+var _scan_timer: float = 0.0                         # 扫描计时器（按住 W 累计）
+const SCAN_DURATION: float = 0.8                     # 扫描需要按住 W 的秒数
+var _is_scanning: bool = false                       # 是否正在进行扫描
+var _compass_locked: bool = false                    # 罗盘是否已锁定目标
+var _search_zones_draw_node: Node2D                  # 搜索圈绘制节点
 
 # ==================== 推进音效 ====================
 var _thrust_stream: AudioStreamPlayer
@@ -145,9 +167,20 @@ func _ready() -> void:
 	_build_player()        # 1. 先创建 player（hazards 依赖 player.position）
 	_build_camera()
 	_build_anchor()
-	_build_hazards()       # 2. 再创建虚假信标/EMI/遮蔽云
+	_spawn_anchor()        # 2. 先生成信标，确定最终位置
+	_build_search_zones()  # 3. 搜索圈基于信标实际位置（确保至少 1 个圈包含它）
+	_build_hazards()       # 4. 再创建虚假信标/EMI/遮蔽云
 	_build_ui()
-	_spawn_anchor()
+
+	# 搜索圈绘制节点
+	_search_zones_draw_node = Node2D.new()
+	_search_zones_draw_node.name = "SearchZonesDraw"
+	add_child(_search_zones_draw_node)
+	_search_zones_draw_node.draw.connect(_draw_search_zones)
+
+	# 信标初始隐藏，搜索圈引导玩家扫描锁定
+	_anchor_set_visible(false)
+	_compass_locked = false
 
 	anchor_dash_node = Node2D.new()
 	anchor_dash_node.name = "AnchorDash"
@@ -164,8 +197,71 @@ func _ready() -> void:
 	score_label.text = "救援: %d" % _session_score
 	_update_fuel()
 
+	# ---- 机载飞控电脑 ----
+	var obd := load("res://OnboardSystem.gd") as GDScript
+	var obd_node: Node = Node.new()
+	obd_node.set_script(obd)
+	obd_node.name = "OnboardSystem"
+	add_child(obd_node)
+	_onboard_system = obd_node
+
+	# ---- 风暴警报 UI ----
+	_build_storm_ui()
+
+	# ---- 背景音乐 ----
+	_build_bgm()
+
 	if level == 1:
 		_spawn_tutorial_hint()
+
+	# ---- 创建无线电通讯系统 ----
+	var RadioAdvisorClass := load("res://RadioAdvisor.gd") as GDScript
+	var radio: Node = RadioAdvisorClass.new()
+	radio.name = "RadioAdvisor"
+	radio._game_scene = self
+	add_child.call_deferred(radio)
+
+
+# ============================================================
+# 背景音乐 — stage1(dm).ogg 自动循环，剧情/暂停时降低响度
+# ============================================================
+func _build_bgm() -> void:
+	_bgm_player = AudioStreamPlayer.new()
+	_bgm_player.name = "BGMusic"
+	_bgm_player.bus = "Master"
+	_bgm_player.volume_db = -8.0  # 默认音量
+	add_child(_bgm_player)
+
+	# 加载关卡内循环曲目 stage1(2.0).ogg
+	_bgm_load_and_play("res://stage1(2.0).ogg")
+
+	if _bgm_player.stream == null:
+		# 回退：尝试原版曲目
+		_bgm_load_and_play("res://stage1(dm).ogg")
+
+
+func _bgm_load_and_play(path: String) -> void:
+	if not ResourceLoader.exists(path):
+		return
+	var stream: AudioStream = load(path)
+	_bgm_player.stream = stream
+	if not stream is AudioStreamInteractive:
+		_bgm_player.finished.connect(_bgm_loop)
+	_bgm_player.play()
+
+
+func _bgm_loop() -> void:
+	# 重播实现循环
+	if _bgm_player != null:
+		_bgm_player.play()
+
+
+func _bgm_duck(to_db: float) -> void:
+	## 动态降低/恢复 BGM 音量（单位：dB）
+	if _bgm_player == null:
+		return
+	var tw := create_tween()
+	tw.tween_property(_bgm_player, "volume_db", to_db, 0.4).set_ease(Tween.EASE_OUT)
 
 
 # ============================================================
@@ -566,7 +662,7 @@ func _build_ui() -> void:
 	score_label = Label.new()
 	score_label.position = Vector2(20, 78)
 	score_label.text = "救援: 0"
-	score_label.add_theme_font_size_override("font_size", 32)
+	score_label.add_theme_font_size_override("font_size", 36)
 	score_label.add_theme_color_override("font_color", Color(1.0, 0.9, 0.3, 0.9))
 	score_label.add_theme_font_override("font", _font)
 	ui.add_child(score_label)
@@ -576,7 +672,7 @@ func _build_ui() -> void:
 	dist_label.position = Vector2(1600 - 224, 210)
 	dist_label.size = Vector2(190, 28)
 	dist_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	dist_label.add_theme_font_size_override("font_size", 22)
+	dist_label.add_theme_font_size_override("font_size", 26)
 	dist_label.add_theme_color_override("font_color", Color(0.5, 0.8, 1.0, 0.7))
 	dist_label.add_theme_font_override("font", _font)
 	ui.add_child(dist_label)
@@ -592,14 +688,14 @@ func _build_ui() -> void:
 	signal_label.text = "搜索中..."
 	ui.add_child(signal_label)
 
-	# ---- 操作提示 ----
+	# ---- 操作提示 (底部中央) ----
 	hint_label = Label.new()
 	hint_label.anchors_preset = Control.PRESET_CENTER_BOTTOM
 	hint_label.position = Vector2(-280, -36)
 	hint_label.size = Vector2(560, 30)
 	hint_label.text = "A/D 旋转 | W 加速 | S 抛锚/减速 | Esc 暂停 | 指针指上 = 对准目标"
 	hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	hint_label.add_theme_font_size_override("font_size", 24)
+	hint_label.add_theme_font_size_override("font_size", 28)
 	hint_label.add_theme_color_override("font_color", Color(0.4, 0.7, 0.9, 0.7))
 	hint_label.add_theme_font_override("font", _font)
 	ui.add_child(hint_label)
@@ -696,6 +792,53 @@ func _spawn_anchor() -> void:
 
 
 # ============================================================
+# 风暴警报 UI（顶部横幅）
+# ============================================================
+func _build_storm_ui() -> void:
+	_storm_label = Label.new()
+	_storm_label.name = "StormAlert"
+	_storm_label.text = ""
+	_storm_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_storm_label.add_theme_font_size_override("font_size", 28)
+	_storm_label.add_theme_font_override("font", _font)
+	_storm_label.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
+	_storm_label.position = Vector2(-500, 420)
+	_storm_label.size = Vector2(1000, 40)
+	_storm_label.modulate.a = 0.0
+	# 加入 UI CanvasLayer（必须在 _build_ui 之后调用，所以通过查找已有 UI 层）
+	# 先存起来，在 _build_ui 创建的 ui 容器里添加
+	call_deferred("_add_storm_label_to_ui")
+
+
+func _add_storm_label_to_ui() -> void:
+	# 找到 UI CanvasLayer 并添加风暴标签
+	for child in get_children():
+		if child is CanvasLayer and child.name == "UI":
+			child.add_child(_storm_label)
+			return
+
+
+func _show_storm_warning(msg: String) -> void:
+	if _storm_label == null:
+		return
+	_storm_label.text = msg
+	_storm_label.add_theme_color_override("font_color", Color(1.0, 0.4, 0.1, 1.0))
+	_storm_label.modulate.a = 1.0
+	_storm_timer = 4.0  # 显示 4 秒后渐隐
+
+
+func _update_storm_label(delta: float) -> void:
+	if _storm_timer <= 0.0:
+		return
+	_storm_timer -= delta
+	# 最后一秒渐隐
+	if _storm_timer < 1.0 and _storm_timer > 0.0:
+		_storm_label.modulate.a = _storm_timer  # 1.0 → 0.0
+	elif _storm_timer <= 0.0:
+		_storm_label.modulate.a = 0.0
+
+
+# ============================================================
 # 救援成功
 # ============================================================
 func _on_rescue(_b: Node2D) -> void:
@@ -720,12 +863,15 @@ func _on_rescue(_b: Node2D) -> void:
 		var fraction: float = 0.3 + float(_rescue_count) * 0.35
 		var na: float = randf_range(0.0, TAU)
 		wind_vector = Vector2.RIGHT.rotated(na) * BASE_WIND * wind_mult * fraction
-		_show_hint_text("警告：电磁风暴正在增强！")
+		_show_storm_warning("⚠ 警告：电磁风暴正在增强！")
+		storm_intensified.emit(_rescue_count)
 	else:
 		var na: float = randf_range(0.0, TAU)
 		var wind_mult: float = 1.0 + float(level - 1) * 0.5
 		var ns: float = BASE_WIND * wind_mult + float(_rescue_count) * 25.0
 		wind_vector = Vector2.RIGHT.rotated(na) * ns
+		if not _first_rescue_done and _rescue_count >= 1:
+			storm_intensified.emit(_rescue_count)
 
 	var tw := create_tween()
 	tw.set_parallel(true)
@@ -762,7 +908,8 @@ func _on_game_over_fuel() -> void:
 	_game_over = true
 	game_over_label.text = "燃料耗尽...\n按 R 重新开始\n按 M 返回主菜单"
 	game_over_label.visible = true
-	hint_label.text = "按 R 重新开始  |  M 返回主菜单"
+	if hint_label != null:
+		hint_label.text = "按 R 重新开始  |  M 返回主菜单"
 	flame_poly.visible = false
 
 
@@ -791,8 +938,13 @@ func _physics_process(delta: float) -> void:
 
 	var thrusting: bool = Input.is_action_pressed("ui_up") and GameManager.fuel > 0.0
 	if thrusting:
-		player.velocity += Vector2.RIGHT.rotated(player.rotation) * THRUST * delta
-		GameManager.fuel = maxf(0.0, GameManager.fuel - FUEL_BURN * delta)
+		var thrust_mult: float = 1.0
+		var burn_mult: float = 1.0
+		if _onboard_system != null:
+			thrust_mult = _onboard_system.get("thrust_multiplier")
+			burn_mult = _onboard_system.get("fuel_burn_multiplier")
+		player.velocity += Vector2.RIGHT.rotated(player.rotation) * THRUST * thrust_mult * delta
+		GameManager.fuel = maxf(0.0, GameManager.fuel - FUEL_BURN * burn_mult * delta)
 		# 推进音效
 		_fill_thrust_buffer()
 		if GameManager.fuel <= 0.0:
@@ -834,8 +986,11 @@ func _physics_process(delta: float) -> void:
 		anchor_dash_node.queue_redraw()
 
 	_update_hazards(delta)
+	_update_scan(delta)
 	_update_compass()
 	_update_fuel()
+	_update_sos_beacon(delta)
+	_update_storm_label(delta)
 
 
 # ============================================================
@@ -905,7 +1060,7 @@ func _draw_fog_clouds() -> void:
 
 
 # ============================================================
-# 罗盘更新（含 EMI 抖动 + 遮蔽云遮挡）
+# 罗盘更新（含 EMI 抖动 + 扫描锁定 + 遮蔽云遮挡）
 # ============================================================
 func _update_compass() -> void:
 	var to: Vector2 = anchor.global_position - player.global_position
@@ -930,6 +1085,14 @@ func _update_compass() -> void:
 			jitter_angle = sin(phase) * 35.0 * intensity
 			break
 
+	# 记录 EMI 分量（仅用于判断是否弹乱码文本）
+	var emi_jitter: float = jitter_angle
+
+	# 进入搜索圈时—罗盘指针轻微噪声（提示进入搜索模式）
+	if not _compass_locked:
+		var noise_t: float = Time.get_ticks_msec() * 0.001
+		jitter_angle += sin(noise_t * 3.7) * 8.0 + cos(noise_t * 2.1) * 6.0
+
 	if dist > 0.5:
 		compass_needle.rotation = to.angle() - player.rotation + deg_to_rad(jitter_angle)
 
@@ -950,7 +1113,8 @@ func _update_compass() -> void:
 	compass_ripple.modulate.a = ripple_alpha
 	compass_ripple.rotation += 0.008
 
-	if absf(jitter_angle) > 2.0:
+	# 仅 EMI 严重干扰时弹乱码（噪声不影响文本）
+	if absf(emi_jitter) > 2.0:
 		signal_label.text = _scramble_text(dist)
 		signal_label.add_theme_color_override("font_color", Color(0.7, 0.4, 1.0, 0.8))
 	else:
@@ -1228,6 +1392,249 @@ func _fill_audio_buffer() -> void:
 
 func _trigger_anchor_sound() -> void:
 	_anchor_sound_left = int(AUDIO_SAMPLE_RATE * 0.1)
+
+
+# ============================================================
+# 搜索圈系统 — 构建 3~4 个半透明巨大圆形 Area2D
+# ============================================================
+func _build_search_zones() -> void:
+	const ZONE_RADIUS: float = 300.0
+	var zone_count: int = randi_range(3, 4)
+
+	# 决定哪个圈包含真实信标（随机选一个）
+	var beacon_zone_index: int = randi_range(0, zone_count - 1)
+
+	# 生成 anchor 之后才调用此方法，所以 anchor 已有初始位置
+	var beacon_pos: Vector2 = anchor.global_position
+
+	for i: int in range(zone_count):
+		var sz := Area2D.new()
+		sz.name = "SearchZone%d" % i
+
+		var col_shape := CollisionShape2D.new()
+		var circle := CircleShape2D.new()
+		circle.radius = ZONE_RADIUS
+		col_shape.shape = circle
+		sz.add_child(col_shape)
+
+		var has_beacon: bool = false
+
+		if i == beacon_zone_index:
+			# 信标圈：以信标位置为中心（偏移极小），确保信标一定在圈内
+			sz.global_position = beacon_pos + Vector2(randf_range(-20, 20), randf_range(-20, 20))
+			has_beacon = true
+		else:
+			# 其他圈：散布在玩家周围较近距离，确保可见
+			var a: float = TAU * float(i) / float(zone_count) + randf_range(-0.2, 0.2)
+			var d: float = randf_range(300.0, 550.0)
+			sz.global_position = player.global_position + Vector2.RIGHT.rotated(a) * d
+
+		_wrap(sz)
+
+		var zone_data := {
+			"node": sz,
+			"has_beacon": has_beacon,
+			"radius": ZONE_RADIUS,
+			"scanned": false
+		}
+
+		_search_zones.append(zone_data)
+		add_child(sz)
+
+		# 连接碰撞信号
+		sz.body_entered.connect(_on_search_zone_entered.bind(zone_data))
+		sz.body_exited.connect(_on_search_zone_exited.bind(zone_data))
+
+	# 如果随机决定后没有任何圈包含信标，强制第一个圈包含它
+	var any_has_beacon: bool = false
+	for zd in _search_zones:
+		if zd["has_beacon"]:
+			any_has_beacon = true
+			break
+	if not any_has_beacon and _search_zones.size() > 0:
+		_search_zones[0]["has_beacon"] = true
+
+
+# ============================================================
+# 搜索圈碰撞回调
+# ============================================================
+func _on_search_zone_entered(body: Node2D, zone_data: Dictionary) -> void:
+	if body != player or _game_over:
+		return
+	if zone_data.get("scanned", false):
+		return  # 已经扫描过的区域不再触发
+
+	_in_search_zone = true
+	_current_search_zone = zone_data
+	_scan_timer = 0.0
+	signal_label.text = "进入信号搜索区..."
+	signal_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.8, 1.0))
+
+
+func _on_search_zone_exited(body: Node2D, zone_data: Dictionary) -> void:
+	if body != player:
+		return
+	if _current_search_zone == zone_data:
+		_in_search_zone = false
+		_current_search_zone = {}
+		_scan_timer = 0.0
+		_is_scanning = false
+		if not _beacon_revealed:
+			signal_label.text = "搜索中..."
+			signal_label.add_theme_color_override("font_color", Color(0.4, 0.6, 0.8, 0.4))
+
+
+# ============================================================
+# 扫描计时器更新（每物理帧调用）
+# ============================================================
+func _update_scan(delta: float) -> void:
+	# 已经锁定信标 → 不再需要扫描
+	if _beacon_revealed:
+		_is_scanning = false
+		return
+
+	# 不在搜索圈内 → 无扫描
+	if not _in_search_zone:
+		return
+
+	var zd := _current_search_zone
+	if zd == null or zd.is_empty() or zd.get("scanned", false):
+		return
+
+	# 必须按住 W 键才能扫描
+	if not Input.is_action_pressed("ui_up"):
+		# 松开 W 则进度衰减（缓慢回落，而非清零）
+		_scan_timer = maxf(0.0, _scan_timer - delta * 2.0)
+		if _scan_timer <= 0.0:
+			_is_scanning = false
+		return
+
+	# 按住 W → 累积扫描进度
+	_is_scanning = true
+	_scan_timer += delta
+
+	var pct: int = int(clampf(_scan_timer / SCAN_DURATION, 0.0, 1.0) * 100.0)
+	signal_label.text = "扫描中... %d%%" % pct
+	signal_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.8, 1.0))
+
+	if _scan_timer >= SCAN_DURATION:
+		_on_scan_complete()
+
+
+# ============================================================
+# 搜索圈绘制
+# ============================================================
+func _draw_search_zones() -> void:
+	if _search_zones_draw_node == null:
+		return
+	const SEG := 64
+	for zd in _search_zones:
+		if zd == null or zd.get("node") == null:
+			continue
+		var node: Area2D = zd["node"]
+		var r: float = zd["radius"]
+		var scanned: bool = zd.get("scanned", false)
+
+		var pts := PackedVector2Array()
+		for i: int in range(SEG + 1):
+			var a: float = TAU * float(i) / float(SEG)
+			pts.append(Vector2(cos(a), sin(a)) * r)
+
+		var pulse: float = sin(Time.get_ticks_msec() * 0.001) * 0.08 + 0.08
+		if scanned:
+			_search_zones_draw_node.draw_colored_polygon(pts, Color(0.3, 0.3, 0.3, 0.08))
+			_search_zones_draw_node.draw_polyline(pts + PackedVector2Array([Vector2(cos(0), sin(0)) * r]), Color(0.5, 0.5, 0.5, 0.35), 1.5)
+		else:
+			# 未扫描 → 蓝色呼吸光晕（更明显）
+			_search_zones_draw_node.draw_colored_polygon(pts, Color(0.15, 0.5, 0.9, 0.08 + pulse))
+			_search_zones_draw_node.draw_polyline(pts + PackedVector2Array([Vector2(cos(0), sin(0)) * r]), Color(0.3, 0.8, 1.0, 0.5), 2.0)
+
+
+# ============================================================
+# 信标可见性控制
+# ============================================================
+func _anchor_set_visible(v: bool) -> void:
+	## 控制信标视觉元素和罗盘锁定状态
+	hex_poly.visible = v
+	hex_border.visible = v
+	rescue_ring.visible = v
+	_beacon_revealed = v
+	# 信标始终锁定罗盘（显示后即稳定指向）
+	if v:
+		_compass_locked = true
+
+
+# ============================================================
+# 扫描完成 — 信标锁定或空圈提示
+# ============================================================
+func _on_scan_complete() -> void:
+	var zd := _current_search_zone
+	if zd == null or zd.is_empty():
+		return
+
+	# 标记此区域已扫描
+	zd["scanned"] = true
+	_is_scanning = false
+
+	if zd.get("has_beacon", false):
+		# 发现信标！
+		scan_completed.emit(true)
+		_anchor_set_visible(true)
+		_show_hint_text("信号锁定！信标已标记")
+		signal_label.text = ">>> 信号锁定 <<<"
+		signal_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.4, 1.0))
+		# 闪烁消失特效：信标从 0 缩放到 1
+		var tw := create_tween()
+		tw.tween_property(hex_poly, "scale", Vector2.ONE, 0.4).set_ease(Tween.EASE_OUT)
+		hex_poly.scale = Vector2.ZERO
+		tw.set_parallel(true)
+		tw.tween_property(hex_border, "scale", Vector2.ONE, 0.4).set_ease(Tween.EASE_OUT)
+		hex_border.scale = Vector2.ZERO
+		tw.tween_property(rescue_ring, "scale", Vector2.ONE, 0.4).set_ease(Tween.EASE_OUT)
+		rescue_ring.scale = Vector2.ZERO
+		# 扫描到信标后，销毁所有搜索圈
+		_cleanup_search_zones()
+	else:
+		# 空圈
+		scan_completed.emit(false)
+		_show_hint_text("此区域无救援信号")
+		signal_label.text = "搜索中..."
+		signal_label.add_theme_color_override("font_color", Color(0.4, 0.6, 0.8, 0.4))
+
+
+func _update_sos_beacon(_delta: float) -> void:
+	## 当玩家距离隐藏信标 ≤ 200 时，信标以 SOS 频率闪烁
+	if _beacon_revealed:
+		return  # 已锁定则不闪烁
+
+	if anchor == null:
+		return
+
+	var dist: float = player.global_position.distance_to(anchor.global_position)
+	if dist > 200.0:
+		return
+
+	# SOS 节奏：0.3s 亮 → 0.3s 灭 → 0.3s 亮 → 0.3s 灭 → 0.3s 亮 → 0.7s 灭 → 0.7s 灭 → 重复 (周期 3.2s)
+	# 简化为 sine 平方波模拟：快闪三下 + 停顿
+	var t: float = fmod(Time.get_ticks_msec() * 0.001, 3.2)
+
+	var visible: bool = false
+	if t < 0.3 or (t >= 0.6 and t < 0.9) or (t >= 1.2 and t < 1.5):
+		visible = true
+
+	hex_poly.visible = visible
+	hex_border.visible = visible
+	rescue_ring.visible = visible
+
+
+func _cleanup_search_zones() -> void:
+	## 移除所有搜索圈节点（信标锁定后不再需要）
+	for zd in _search_zones:
+		if zd.get("node") != null:
+			(zd["node"] as Node).queue_free()
+	_search_zones.clear()
+	_in_search_zone = false
+	_current_search_zone = {}
 
 
 # ============================================================

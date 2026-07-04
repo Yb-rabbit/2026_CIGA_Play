@@ -22,6 +22,9 @@ func _ready() -> void:
 
 	_font = load("res://YuFanDanQingSong.otf") as Font
 
+	# 背景音乐（原版曲目，选关页面共享）
+	_build_menu_bgm()
+
 	# 纯黑背景
 	var bg := ColorRect.new()
 	bg.name = "Background"
@@ -32,7 +35,7 @@ func _ready() -> void:
 	# ---- 页面标题 ----
 	var title := Label.new()
 	title.name = "Title"
-	title.text = "选择关卡"
+	title.text = "选择目标日志"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_font_size_override("font_size", 56)
 	title.add_theme_color_override("font_color", Color(0.3, 0.85, 1.0, 0.9))
@@ -62,7 +65,7 @@ func _ready() -> void:
 	# ---- 返回按钮 ----
 	var back_btn := _make_small_button("返回主菜单", _on_back)
 	back_btn.set_anchors_and_offsets_preset(Control.PRESET_CENTER_BOTTOM)
-	back_btn.position = Vector2(-100, -164)
+	back_btn.position = Vector2(-100, -184)
 	back_btn.size = Vector2(200, 48)
 	add_child(back_btn)
 
@@ -106,11 +109,11 @@ func _make_level_card(level_id: int) -> Control:
 	# 关卡描述标签
 	var desc := Label.new()
 	desc.name = "LevelDesc"
-	desc.text = "关卡 %d" % level_id
+	desc.text = "日志 %d" % level_id
 	desc.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	desc.add_theme_font_size_override("font_size", 18)
+	desc.add_theme_font_size_override("font_size", 32)
 	desc.add_theme_font_override("font", _font)
-	desc.size = Vector2(160, 30)
+	desc.size = Vector2(160, 32)
 	desc.position = Vector2(0, 135)
 	desc.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	card.add_child(desc)
@@ -177,3 +180,16 @@ func _on_level_selected(level_id: int) -> void:
 
 func _on_back() -> void:
 	GameManager.change_scene("MainMenu")
+
+
+func _build_menu_bgm() -> void:
+	if not ResourceLoader.exists("res://stage1(dm).ogg"):
+		return
+	var bgm := AudioStreamPlayer.new()
+	bgm.name = "MenuBGM"
+	bgm.bus = "Master"
+	bgm.volume_db = -6.0
+	bgm.stream = load("res://stage1(dm).ogg")
+	bgm.finished.connect(bgm.play)
+	add_child(bgm)
+	bgm.play()

@@ -73,6 +73,9 @@ func _ready() -> void:
 	exit_btn.modulate = Color(0.8, 0.6, 0.6, 1.0)
 	add_child(exit_btn)
 
+	# 背景音乐（原版曲目，主菜单专用）
+	_build_menu_bgm()
+
 # ============================================================
 # 按钮工厂
 # ============================================================
@@ -121,3 +124,16 @@ func _on_start_game() -> void:
 
 func _on_exit_game() -> void:
 	get_tree().quit()
+
+
+func _build_menu_bgm() -> void:
+	if not ResourceLoader.exists("res://stage1(dm).ogg"):
+		return
+	var bgm := AudioStreamPlayer.new()
+	bgm.name = "MenuBGM"
+	bgm.bus = "Master"
+	bgm.volume_db = -6.0
+	bgm.stream = load("res://stage1(dm).ogg")
+	bgm.finished.connect(bgm.play)
+	add_child(bgm)
+	bgm.play()
