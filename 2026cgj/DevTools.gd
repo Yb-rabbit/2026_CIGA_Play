@@ -20,7 +20,7 @@ func _ready() -> void:
 	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 	add_child(overlay)
 
-	# ---- 居中面板 ----
+	# ---- 居中面板（左侧：按钮操作） ----
 	var panel := Panel.new()
 	panel.name = "Panel"
 	panel.size = Vector2(420, 700)
@@ -39,7 +39,7 @@ func _ready() -> void:
 	panel.add_theme_stylebox_override("panel", panel_style)
 
 	panel.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
-	panel.position = Vector2(-220, -310)
+	panel.position = Vector2(-420, -310)  # 左移，给右侧面板腾空间
 	add_child(panel)
 
 	# ---- 标题 ----
@@ -108,7 +108,7 @@ func _ready() -> void:
 	panel.add_child(win_btn)
 	btn_y += BTN_GAP
 
-	var unlock_btn := _make_button("解锁全部关卡+无尽+WIN", _on_unlock_all)
+	var unlock_btn := _make_button("解锁全部卡片", _on_unlock_all)
 	unlock_btn.position = Vector2(60, btn_y)
 	panel.add_child(unlock_btn)
 	btn_y += BTN_GAP
@@ -130,6 +130,9 @@ func _ready() -> void:
 	hint.position = Vector2(20, 588)
 	panel.add_child(hint)
 
+	# ---- 右侧面板：关卡完成状态切换 ----
+	_build_toggle_panel()
+
 
 # ============================================================
 # 按钮工厂（与 PauseMenu 保持一致）
@@ -144,10 +147,10 @@ func _make_button(text: String, callback: Callable) -> Button:
 
 	var normal_style := StyleBoxFlat.new()
 	normal_style.bg_color = Color(0.08, 0.12, 0.24, 0.9)
-	normal_style.border_width_left = 1
-	normal_style.border_width_right = 1
-	normal_style.border_width_top = 1
-	normal_style.border_width_bottom = 1
+	normal_style.border_width_left = 4
+	normal_style.border_width_right = 4
+	normal_style.border_width_top = 4
+	normal_style.border_width_bottom = 4
 	normal_style.border_color = Color(0.3, 0.6, 1.0, 0.5)
 	normal_style.corner_radius_top_left = 8
 	normal_style.corner_radius_top_right = 8
@@ -236,8 +239,129 @@ func _on_reset_progress() -> void:
 	GameManager.completed_levels = []
 	GameManager.current_level = 1
 	GameManager.high_score = 0
+	GameManager.best_times = {}
+	GameManager.best_distances = {}
 	# 跳转到选关页面让玩家立即看到变化
 	_close_then_go("LevelSelect")
+
+
+func _build_toggle_panel() -> void:
+	## 右侧面板：关卡完成状态切换按钮
+	var rpanel := Panel.new()
+	rpanel.name = "TogglePanel"
+	rpanel.size = Vector2(240, 300)
+
+	var rstyle := StyleBoxFlat.new()
+	rstyle.bg_color = Color(0.04, 0.06, 0.14, 0.92)
+	rstyle.border_width_left = 2
+	rstyle.border_width_right = 2
+	rstyle.border_width_top = 2
+	rstyle.border_width_bottom = 2
+	rstyle.border_color = Color(0.3, 0.65, 1.0, 0.5)
+	rstyle.corner_radius_top_left = 12
+	rstyle.corner_radius_top_right = 12
+	rstyle.corner_radius_bottom_left = 12
+	rstyle.corner_radius_bottom_right = 12
+	rpanel.add_theme_stylebox_override("panel", rstyle)
+
+	rpanel.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	rpanel.position = Vector2(20, -310)
+	add_child(rpanel)
+
+	# 标题
+	var rtitle := Label.new()
+	rtitle.name = "ToggleTitle"
+	rtitle.text = "关卡完成开关"
+	rtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	rtitle.add_theme_font_size_override("font_size", 26)
+	rtitle.add_theme_color_override("font_color", Color(0.4, 0.85, 1.0, 0.9))
+	rtitle.add_theme_font_override("font", _font)
+	rtitle.size = Vector2(200, 36)
+	rtitle.position = Vector2(20, 14)
+	rpanel.add_child(rtitle)
+
+	# 关卡切换按钮
+	var rbtn_y := 70.0
+	for lv: int in range(1, GameManager.MAX_LEVELS + 1):
+		var completed: bool = (lv in GameManager.completed_levels)
+		var btn := Button.new()
+		btn.name = "Toggle_%d" % lv
+		btn.text = "日志 %d：%s" % [lv, "已完成 ✓" if completed else "未通关"]
+		btn.size = Vector2(200, 50)
+		btn.position = Vector2(20, rbtn_y)
+		btn.add_theme_font_size_override("font_size", 22)
+		btn.add_theme_font_override("font", _font)
+		# 已完成→绿色，未通关→灰色
+		if completed:
+			btn.add_theme_color_override("font_color", Color(0.3, 0.95, 0.5, 0.9))
+		else:
+			btn.add_theme_color_override("font_color", Color(0.5, 0.5, 0.55, 0.8))
+		btn.pressed.connect(_on_toggle_level_complete.bind(lv, btn))
+		rpanel.add_child(btn)
+		rbtn_y += 64.0
+
+	# 底部提示
+	var rhint := Label.new()
+	rhint.name = "ToggleHint"
+	rhint.text = "点击切换状态\nWIN 随全部通关自动更新"
+	rhint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	rhint.add_theme_font_size_override("font_size", 14)
+	rhint.add_theme_color_override("font_color", Color(0.35, 0.35, 0.45, 0.5))
+	rhint.add_theme_font_override("font", _font)
+	rhint.size = Vector2(200, 36)
+	rhint.position = Vector2(20, 260)
+	rpanel.add_child(rhint)
+
+
+func _on_toggle_level_complete(level_id: int, btn: Button) -> void:
+	## 切换关卡完成状态，维护 WIN 逻辑
+	var was_completed := (level_id in GameManager.completed_levels)
+	if was_completed:
+		GameManager.completed_levels.erase(level_id)
+		print("[DevTools] 关卡 %d 标记为未通关" % level_id)
+	else:
+		if level_id not in GameManager.completed_levels:
+			GameManager.completed_levels.append(level_id)
+		GameManager.completed_levels.sort()
+		print("[DevTools] 关卡 %d 标记为已完成" % level_id)
+
+	# 同步更新无尽模式解锁 & WIN 状态
+	var all_done := GameManager.check_all_levels_completed()
+
+	# 刷新右侧面板按钮文字和颜色
+	_refresh_toggle_buttons()
+
+	# 同时更新左侧信息标签
+	var info := get_node_or_null("Panel/InfoLabel") as Label
+	if info != null:
+		info.text = "关卡: %d  已解锁: %s  无尽: %s  WIN: %s" % [
+			GameManager.current_level,
+			str(GameManager.unlocked_levels),
+			"是" if GameManager.endless_unlocked else "否",
+			"是" if all_done else "否"
+		]
+
+	# 如果在选关页面，刷新卡片
+	var parent := get_parent()
+	if parent != null and parent.has_method("refresh_cards"):
+		parent.refresh_cards()
+
+
+func _refresh_toggle_buttons() -> void:
+	## 刷新右侧面板所有切换按钮的文字和颜色
+	var rpanel := get_node_or_null("TogglePanel")
+	if rpanel == null:
+		return
+	for lv: int in range(1, GameManager.MAX_LEVELS + 1):
+		var btn := rpanel.get_node_or_null("Toggle_%d" % lv) as Button
+		if btn == null:
+			continue
+		var completed: bool = (lv in GameManager.completed_levels)
+		btn.text = "日志 %d：%s" % [lv, "已完成 ✓" if completed else "未通关"]
+		if completed:
+			btn.add_theme_color_override("font_color", Color(0.3, 0.95, 0.5, 0.9))
+		else:
+			btn.add_theme_color_override("font_color", Color(0.5, 0.5, 0.55, 0.8))
 
 
 func _close_then_go(scene: String) -> void:

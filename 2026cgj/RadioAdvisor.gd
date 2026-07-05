@@ -51,6 +51,9 @@ func _process(delta: float) -> void:
 		_idle_timer = IDLE_INTERVAL + randf_range(-3.0, 3.0)
 		_send_idle_message()
 
+	if _zone_entry_cooldown > 0.0:
+		_zone_entry_cooldown -= delta
+
 
 func _send_idle_message() -> void:
 	const MSGS: Array[Dictionary] = [
@@ -134,7 +137,10 @@ func _on_decoy_collided() -> void:
 	_show_message("[飞控电脑]", "赝品信标触碰！燃料快速流失，立即脱离接触区域。", Color(0.9, 0.2, 0.6))
 
 func _on_search_zone_entered() -> void:
-	pass  # 搜索圈进入提示已由 signal_label 和进度条可视化代替，无需机载播报
+	if _zone_entry_cooldown > 0.0:
+		return
+	_zone_entry_cooldown = ZONE_ENTRY_COOLDOWN
+	_show_message("[传感器]", "进入信号搜索区，按住 W 开始扫描。", Color(0.3, 0.8, 1.0))
 
 func _on_search_zone_scanned(has_beacon: bool) -> void:
 	if has_beacon:
@@ -173,3 +179,14 @@ func _remove_label(label: Label) -> void:
 	_active_labels.erase(label)
 	if is_instance_valid(label):
 		label.queue_free()
+	_reposition_all_labels()
+
+
+func _reposition_all_labels() -> void:
+	for i: int in range(_active_labels.size()):
+		var lbl := _active_labels[i] as Label
+		if not is_instance_valid(lbl):
+			continue
+		var top: float = 850.0 - i * (LABEL_HEIGHT + 8)
+		lbl.offset_top = top
+		lbl.offset_bottom = top + float(LABEL_HEIGHT)

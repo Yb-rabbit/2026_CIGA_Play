@@ -153,6 +153,8 @@ res://
 | `high_score` | `int` | `0` | 历史最高分 |
 | `game_state` | `GameState` | `MENU` | 当前游戏状态 |
 | `fuel` | `float` | `170.0` | 跨场景燃料缓存 |
+| `best_times` | `Dictionary` | `{}` | 各关卡最佳用时（秒），键=关卡ID |
+| `best_distances` | `Dictionary` | `{}` | 各关卡最佳航程（单位），键=关卡ID |
 
 ### 枚举
 
@@ -169,6 +171,8 @@ enum GameState { MENU, PLAYING, PAUSED, STORY, ENDLESS }
 | `complete_level(id)` | 标记关卡通关 + 自动解锁下一关 |
 | `check_all_levels_completed()` | 检测 1,2,3 全部通关 → 解锁 `endless_unlocked` |
 | `is_level_unlocked(id)` | 查询关卡解锁状态 |
+| `get_best_time(level)` / `set_best_time(level, val)` | 读取/更新最佳用时（仅更新更优成绩） |
+| `get_best_distance(level)` / `set_best_distance(level, val)` | 读取/更新最佳航程（仅更新更优成绩） |
 
 ### 解锁规则
 
@@ -390,7 +394,49 @@ enum GameState { MENU, PLAYING, PAUSED, STORY, ENDLESS }
 
 显示当前关卡、已解锁列表、无尽模式状态、WIN 卡片状态。
 
+### 右侧面板：关卡完成开关
+
+| 元素 | 内容 |
+|------|------|
+| 面板 | 居中 Panel，240×300，位于右侧 (x=+20) |
+| 标题 | "关卡完成开关" |
+| 按钮 | 3 个可点击按钮：日志 1/2/3 完成状态切换 |
+| 逻辑 | 已完成 → 绿色文字 "已完成 ✓"；未通关 → 灰色文字 "未通关" |
+| WIN 维护 | 点击切换后自动调用 `check_all_levels_completed()` 更新 WIN/无尽状态 |
+| 卡片同步 | 切换状态后自动调用 LevelSelect 的 `refresh_cards()` 实时刷新卡片 |
+
+> **修复：** 日志 1 允许切换完成状态（可取消已完成）。
+
 ---
+
+## 新增功能：任务评级系统
+
+### 数据存储 (GameManager)
+- `best_times: Dictionary` — 各关卡最佳用时（秒）
+- `best_distances: Dictionary` — 各关卡最佳航程（单位）
+- `get_best_time(level)` / `set_best_time(level, val)` — 读写（仅更新更优成绩）
+- `get_best_distance(level)` / `set_best_distance(level, val)` — 同上
+- 重置进度时一并清空
+
+### 采集逻辑 (GameScene)
+- 每帧累加 `player.velocity.length() * delta`（距离）
+- 累计超过 **50 单位** 后激活计时
+- 激活时重置累计距离为 0，开始记录有效航程和时间
+- 通关时调用 `set_best_time()` / `set_best_distance()` 保存
+- 暂停期间自动停止累加（`get_tree().paused`）
+
+### 选关页面显示
+- 卡片下方独立显示评级标签（font_size=26，双行格式）
+- 日志长度：`日志长度` / `00:02:03`（时:分:秒）
+- 航程：`航程` / `1234 单位`
+- 无记录显示 `--`
+- 已通关卡片右上角显示绿色 **✓** 勾号
+
+### 搜索圈修复
+- `_on_scan_complete()` 中新增运行时几何验证
+- 检查信标实际坐标是否在扫描圈半径内（`distance_to() ≤ zone_radius`）
+- 避免信标落入非标记圈导致"漏报"
+
 
 ## 14. RadioAdvisor（机载通讯）
 

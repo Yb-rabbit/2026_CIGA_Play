@@ -40,6 +40,12 @@ var _rescue_count: int = 0
 var _game_over: bool = false
 var rescuing: bool = false
 
+# ==================== 任务评级 — 距离/时间追踪 ====================
+const TRACKING_THRESHOLD: float = 50.0              # 累计移动超过此距离后开始计时
+var _tracking_active: bool = false                  # 是否已开始记录
+var _accumulated_distance: float = 0.0              # 累计移动距离
+var _elapsed_time: float = 0.0                      # 有效用时（秒）
+
 # ==================== 节点引用 ====================
 var player: CharacterBody2D
 var body_poly: Polygon2D
@@ -996,6 +1002,14 @@ func _level_complete() -> void:
 	GameManager.complete_level(GameManager.current_level)
 	# 检测全部通关，解锁无尽模式 + WIN 表彰
 	GameManager.check_all_levels_completed()
+
+	# ---- 任务评级：保存本次用时和航程（仅当追踪已激活） ----
+	if _tracking_active:
+		var lv := GameManager.current_level
+		GameManager.set_best_time(lv, _elapsed_time)
+		GameManager.set_best_distance(lv, _accumulated_distance)
+		print("[GameScene] 关卡 %d 本次用时: %.1f 秒, 航程: %.0f 单位" % [lv, _elapsed_time, _accumulated_distance])
+
 	await get_tree().create_timer(0.8).timeout
 	GameManager.change_scene("LevelSelect")
 
@@ -1101,6 +1115,20 @@ func _physics_process(delta: float) -> void:
 	_update_fuel()
 	_update_sos_beacon(delta)
 	_update_storm_label(delta)
+
+	# ---- 任务评级：距离/时间追踪 ----
+	if not _tracking_active:
+		# 每帧累加移动距离，超过阈值后激活计时
+		_accumulated_distance += player.velocity.length() * delta
+		if _accumulated_distance >= TRACKING_THRESHOLD:
+			_tracking_active = true
+			# 重置累计距离，从此刻开始重新记录有效航程
+			_accumulated_distance = 0.0
+			_elapsed_time = 0.0
+	else:
+		# 已激活：持续累加距离和时间
+		_accumulated_distance += player.velocity.length() * delta
+		_elapsed_time += delta
 
 
 # ============================================================
@@ -1739,7 +1767,14 @@ func _on_scan_complete() -> void:
 	zd["scanned"] = true
 	_is_scanning = false
 
-	if zd.get("has_beacon", false):
+	# 运行时双重验证：检查信标实际位置是否在当前扫描圈内
+	var zone_node: Area2D = zd.get("node") as Area2D
+	var zone_radius: float = zd.get("radius", 300.0)
+	var beacon_in_zone: bool = false
+	if zone_node != null and anchor != null:
+		beacon_in_zone = anchor.global_position.distance_to(zone_node.global_position) <= zone_radius
+	# 信标圈 on_init 标记 或 实际检测到信标在圈内 → 判定为发现信标
+	if zd.get("has_beacon", false) or beacon_in_zone:
 		# 发现信标！
 		scan_completed.emit(true)
 		search_zone_scanned.emit(true)

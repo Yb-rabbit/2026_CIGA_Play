@@ -44,6 +44,12 @@ var fuel: float = 170.0                             # 全局燃料缓存，用�
 var endless_unlocked: bool = false                  # 是否已解锁无尽模式（三关全部通关后）
 var _pre_pause_state: GameState = GameState.PLAYING # 暂停前的游戏状态（用于恢复）
 
+# ==================== 任务评级数据 ====================
+## 最佳用时记录：key=关卡ID(int), value=最短用时秒数(float)
+var best_times: Dictionary = {}
+## 最佳航程记录：key=关卡ID(int), value=最短移动距离(float)
+var best_distances: Dictionary = {}
+
 # ==================== 信号 ====================
 signal scene_changed(scene_name: String)
 signal game_paused()
@@ -248,3 +254,33 @@ func check_all_levels_completed() -> bool:
 		print("[GameManager] 全部关卡通关！无尽模式已解锁")
 		return true
 	return false
+
+
+# ============================================================
+# 任务评级 — 最佳用时 getter/setter
+# ============================================================
+func get_best_time(level_id: int) -> float:
+	## 返回指定关卡的最短用时（秒），若无记录返回 0.0
+	return best_times.get(level_id, 0.0)
+
+
+func set_best_time(level_id: int, time_seconds: float) -> void:
+	## 设置指定关卡的最短用时（仅当新成绩更优或尚无记录时更新）
+	if not best_times.has(level_id) or time_seconds < best_times[level_id]:
+		best_times[level_id] = time_seconds
+		print("[GameManager] 关卡 %d 最佳用时更新: %.1f 秒" % [level_id, time_seconds])
+
+
+# ============================================================
+# 任务评级 — 最佳航程 getter/setter
+# ============================================================
+func get_best_distance(level_id: int) -> float:
+	## 返回指定关卡的最短航程（单位），若无记录返回 0.0
+	return best_distances.get(level_id, 0.0)
+
+
+func set_best_distance(level_id: int, distance: float) -> void:
+	## 设置指定关卡的最短航程（仅当新成绩更优或尚无记录时更新）
+	if not best_distances.has(level_id) or distance < best_distances[level_id]:
+		best_distances[level_id] = distance
+		print("[GameManager] 关卡 %d 最佳航程更新: %.0f 单位" % [level_id, distance])
